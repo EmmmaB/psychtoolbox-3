@@ -319,9 +319,8 @@ boolean PsychOpenOnscreenWindow(PsychScreenSettingsType *screenSettings, PsychWi
     PsychCopyRect((*windowRecord)->rect, screenSettings->rect);
     (*windowRecord)->depth=PsychGetScreenDepthValue(screenSettings->screenNumber);
  
-    if (false) {
-        printf("\n\nPTB-INFO: This is the 2nd pre-release of PTB 1.0.6 (Build-ID 1.0.5-MK11), intended as update for Psychtoolbox 1.0.5\n\n");
-        // printf("PTB-INFO: Small details may change in the final release for Psychtoolbox 1.0.6 - Use at your own Risk!\n\n\n");
+    if (true) {
+        printf("\n\nPTB-INFO: This is bugfix release 1 of Psychtoolbox 1.0.6 - DrawText fixed.\n\n");
     }
     
     // Check if the graphics hardware supports all required OpenGL-Extensions:
