@@ -137,7 +137,7 @@ void InitializeSynopsis()
 	synopsis[i++] = "isOffscreen=Screen(windowPtr,'IsOffscreen');";
 	synopsis[i++] = "hz=Screen('FrameRate', windowPtrOrScreenNumber);";	
 	synopsis[i++] = "hz=Screen('NominalFrameRate', windowPtrOrScreenNumber);";	
-	synopsis[i++] = "[ monitorRefreshInterval nrValidSamples stddev ]=Screen('GetFlipInterval', windowPtr [, nrSamples] [, stddev] [, timeout]);";
+	synopsis[i++] = "[ monitorFlipInterval nrValidSamples stddev ]=Screen('GetFlipInterval', windowPtr [, nrSamples] [, stddev] [, timeout]);";
         synopsis[i++] = "screenNumber=Screen('WindowScreenNumber', windowPtr);";
 	synopsis[i++] = "rect=Screen('Rect', windowPtrOrScreenNumber);";
 	synopsis[i++] = "pixelSize=Screen('PixelSize', windowPtrOrScreenNumber);";
@@ -158,6 +158,7 @@ void InitializeSynopsis()
 	synopsis[i++] = "oldSecondsMultiplier=Screen('Preference', 'SecondsMultiplier');";
 	synopsis[i++] = "Screen('Preference','SkipSyncTests', skipTest);";
 	synopsis[i++] = "Screen('Preference','VisualDebugLevel', level (valid values between 0 and 5));";
+        synopsis[i++] = "Screen('Preference', 'ConserveVRAM', mode (valid values between 0 and 3));";
 		
 	//synopsis[i++] = "\n% Set clipping region (on- or off- screen):";
 	

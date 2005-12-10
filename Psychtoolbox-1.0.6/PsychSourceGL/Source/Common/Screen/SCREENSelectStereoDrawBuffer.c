@@ -72,17 +72,17 @@ PsychError SCREENSelectStereoDrawBuffer(void)
 	// Switch to associated GL-Context:
         PsychSetGLContext(windowRecord);
         
-        // Select target draw buffer:
-        switch(bufferid) {
-            case 0:
-                glDrawBuffer(GL_BACK_LEFT);
-            break;
-            case 1:
-                glDrawBuffer(GL_BACK_RIGHT);
-            break;
-            case 2:
-                glDrawBuffer(GL_BACK);
-            break;
+        // OpenGL native stereo?
+        if (windowRecord->stereomode==1) {
+            // OpenGL native stereo via separate back-buffers: Select target draw buffer:
+            switch(bufferid) {
+                case 0:
+                    glDrawBuffer(GL_BACK_LEFT);
+                    break;
+                case 1:
+                    glDrawBuffer(GL_BACK_RIGHT);
+                    break;
+            }
         }
         
 	return(PsychError_none);
