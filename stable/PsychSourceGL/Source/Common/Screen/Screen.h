@@ -16,11 +16,19 @@
 		1/25/05			awi		Merged in mk version which provides ScreenCloseAllWindows() declaration. Then restored SCREENGetTimeList declaration.  
                 4/22/05                 mk              Added new commands DrawLines, SelectStereoDrawBuffer and DrawingFinished
                 5/09/05                 mk              Added new command GetFlipInterval
-*/
+                10/11/05                mk              Support for special movie playback added (include of PsychMovieSupport.h)
+
+ */
 
 //begin include once 
 #ifndef PSYCH_IS_INCLUDED_Screen
 #define PSYCH_IS_INCLUDED_Screen
+
+#if PSYCH_SYSTEM == PSYCH_OSX
+
+#include <Quicktime/Movies.h>
+
+#endif
 
 
 //project includes includes for screen foundation
@@ -33,6 +41,7 @@
 #include "PsychWindowTextGlue.h"
 #include "WindowBank.h"
 #include "PsychWindowGlue.h"
+#include "PsychMovieSupport.h"
 #include "PsychTextureSupport.h"
 #include "PsychAlphaBlending.h"
 
@@ -66,6 +75,9 @@ char		*PsychGetGLErrorNameString(GLenum errorConstant);
 void		PsychTestForGLErrorsC(int lineNum, const char *funcName, const char *fileName);
 GLdouble	*PsychExtractQuadVertexFromRect(double *rect, int vertexNumber, GLdouble *vertex);
 
+// Helper routines for vertically compressed stereo displays: Defined in SCREENSelectStereoDrawBuffer.c
+int PsychSwitchCompressedStereoDrawBuffer(PsychWindowRecordType *windowRecord, int newbuffer);
+void PsychComposeCompressedStereoBuffer(PsychWindowRecordType *windowRecord);
 
 
 
@@ -129,7 +141,20 @@ PsychError      SCREENSelectStereoDrawBuffer(void);
 PsychError      SCREENDrawingFinished(void); 
 PsychError      SCREENDrawLines(void);
 PsychError      SCREENGetFlipInterval(void);
- 
+PsychError      SCREENCloseMovie(void);
+PsychError      SCREENOpenMovie(void);
+PsychError      SCREENPlayMovie(void);
+PsychError      SCREENSetMovieTimeIndex(void);
+PsychError      SCREENGetMovieTimeIndex(void);
+PsychError      SCREENGetMovieImage(void);
+PsychError      SCREENglPushMatrix(void);
+PsychError      SCREENglPopMatrix(void);
+PsychError      SCREENglLoadIdentity(void);
+PsychError      SCREENglTranslate(void);
+PsychError      SCREENglScale(void);
+PsychError      SCREENglRotate(void);
+PsychError      SCREENPreloadTextures(void);
+
 
 
 //experimental

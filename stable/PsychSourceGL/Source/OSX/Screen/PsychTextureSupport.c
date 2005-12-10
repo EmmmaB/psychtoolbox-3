@@ -25,6 +25,7 @@
                 8/11/05         mk              New texture handling: We now use real OpenGL textures instead of our old "pseudo-texture"
                                                 implementation. This is *way* faster, e.g., drawing times decrease from 35 ms to 3 ms for big
                                                 textures. Some experimental optimizations are implemented but not yet enabled...
+                10/11/05        mk              Support for special Quicktime movie textures added.
         DESCRIPTION:
 	
 		Psychtoolbox functions for dealing with textures.
@@ -49,7 +50,8 @@
 static Boolean renderswap = false;
 
 // If set to true, then the apple client storage extensions are used: I doubt that they have any
-// advantage for the current way PTB is used, but you never know...
+// advantage for the current way PTB is used, but it can be useful to conserve VRAM on very
+// low-mem gfx cards if Screen('Preference', 'ConserveVRAM') is set appropriately.
 static Boolean clientstorage = false;
 
 void PsychInitWindowRecordTextureFields(PsychWindowRecordType *win)
@@ -57,6 +59,8 @@ void PsychInitWindowRecordTextureFields(PsychWindowRecordType *win)
 	win->textureMemory=NULL;
 	win->textureNumber=0;
 	win->textureMemorySizeBytes=0;
+        // NULL-Out special texture handle for Quicktime Movie textures (see PsychMovieSupport.c)
+        win->targetSpecific.QuickTimeGLTexture = NULL;
 }
 
 
@@ -132,7 +136,7 @@ void PsychCreateTextureForWindow(PsychWindowRecordType *win)
 	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
 	glTexImage2D(GL_TEXTURE_RECTANGLE_EXT, 0, GL_RGBA, (GLsizei)frameWidth, (GLsizei)frameHeight, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, win->textureMemory);
-	glBindTexture(GL_TEXTURE_RECTANGLE_EXT, NULL);  //glColor does not work while a texture is bound.  
+	glBindTexture(GL_TEXTURE_RECTANGLE_EXT, 0);  //glColor does not work while a texture is bound.  
 }
 
 
@@ -148,6 +152,11 @@ void PsychCreateTexture(PsychWindowRecordType *win)
         // texture:
 	PsychSetGLContext(win);
 
+        // Check if user requested explicit use of clientstorage + Use of System RAM for
+        // storage of textures instead of VRAM caching in order to conserve VRAM memory on
+        // low-mem gfx-cards. Enable clientstorage, if so...
+        clientstorage = (PsychPrefStateGet_ConserveVRAM() & kPsychDontCacheTextures) ? TRUE : FALSE;
+        
 	// Create a unique texture handle for this texture
 	glGenTextures(1, &win->textureNumber);
 
@@ -160,8 +169,11 @@ void PsychCreateTexture(PsychWindowRecordType *win)
 
         // Setup texture parameters like optimization, storage format et al.
 
-	// Choose the texture acceleration extension
-	textureHint= GL_STORAGE_CACHED_APPLE;  //GL_STORAGE_PRIVATE_APPLE, GL_STORAGE_CACHED_APPLE, GL_STORAGE_SHARED_APPLE
+	// Choose the texture acceleration extension out of GL_STORAGE_PRIVATE_APPLE, GL_STORAGE_CACHED_APPLE, GL_STORAGE_SHARED_APPLE
+        // We normally use CACHED storage for caching textures in gfx-cards VRAM for high-perf drawing,
+        // but if user explicitely requests client storage for saving VRAM memory, we do so and
+        // use SHARED storage in system RAM --> Slower but saves VRAM memory.
+	textureHint= (clientstorage) ? GL_STORAGE_SHARED_APPLE : GL_STORAGE_CACHED_APPLE;  
         glTexParameteri(GL_TEXTURE_RECTANGLE_EXT, GL_TEXTURE_STORAGE_HINT_APPLE , textureHint);
 
         // Not using GL_STORAGE_SHARED_APPLE provided increased reliability of timing and significantly shorter rendering times
@@ -314,10 +326,9 @@ void PsychCreateTexture(PsychWindowRecordType *win)
             win->textureMemorySizeBytes=0;
         }
         // Texture object ready for future use. Unbind it:
-		glBindTexture(GL_TEXTURE_RECTANGLE_EXT, NULL);
-		
-		// Reset pixel storage parameter:
-		glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+	glBindTexture(GL_TEXTURE_RECTANGLE_EXT, 0);
+        // Reset pixel storage parameter:
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
         
         // Finished!
         return;
@@ -334,8 +345,21 @@ void PsychFreeTextureForWindowRecord(PsychWindowRecordType *win)
     // Destroy OpenGL texture object for windows that have one:
     if((win->windowType==kPsychSingleBufferOnscreen || win->windowType==kPsychDoubleBufferOnscreen || win->windowType==kPsychTexture) &&
        (win->targetSpecific.contextObject)) {
+        // Activate associated OpenGL context:
         PsychSetGLContext(win);
+        PsychTestForGLErrors();
+        // Call special texture release routine for Movie textures: This routine will
+        // check if 'win' is a movie texture and perform the necessary cleanup work, if so:
+        PsychFreeMovieTexture(win);
+        // If we use client-storage textures, we need to wait for completion of texture operations on the
+        // to-be-released client texture buffer before deleting it and freeing the RAM backing buffers. Waiting for
+        // completion is done via FinishObjectApple...
+        // We need to use glFinish() here. FinishObjectApple would be better (more async operations) but it doesn't
+        // work for some strange reason :(
+        if ((win->textureMemory) && (win->textureNumber > 0)) glFinish(); // FinishObjectAPPLE(GL_TEXTURE_2D, win->textureNumber);
+        // Perform standard OpenGL texture cleanup:
         glDeleteTextures(1, &win->textureNumber);
+        PsychTestForGLErrors();
     }
 
     // Free system RAM backing memory buffer, if any:
@@ -343,7 +367,6 @@ void PsychFreeTextureForWindowRecord(PsychWindowRecordType *win)
     win->textureMemory=NULL;
     win->textureMemorySizeBytes=0;
     win->textureNumber=0;
-    
     return;
 }
 
@@ -375,7 +398,16 @@ void PsychBlitTextureToDisplay(PsychWindowRecordType *source, PsychWindowRecordT
             sourceYEnd=sourceRect[kPsychRight];
         }
     
-	// MK: We need to reenable the proper texturing mode. This fixes bug reported in Forum message 3055,
+	// Override for special case: Corevideo texture from Quicktime-subsystem.
+        if (source->targetSpecific.QuickTimeGLTexture) {
+            sourceHeight=PsychGetHeightFromRect(source->rect);
+            sourceX=sourceRect[kPsychLeft];
+            sourceY=sourceRect[kPsychBottom];
+            sourceXEnd=sourceRect[kPsychRight];
+            sourceYEnd=sourceRect[kPsychTop];
+        }
+        
+        // MK: We need to reenable the proper texturing mode. This fixes bug reported in Forum message 3055,
 	// because SCREENDrawText glDisable'd GL_TEXTURE_RECTANGLE_EXT, without this routine reenabling it.
 	glDisable(GL_TEXTURE_2D);
 	glEnable(GL_TEXTURE_RECTANGLE_EXT);
@@ -427,7 +459,8 @@ void PsychBlitTextureToDisplay(PsychWindowRecordType *source, PsychWindowRecordT
         // in some rotated and mirrored order. This is way faster, as the GPU is optimized for such things...
 	glBegin(GL_QUADS);
         // Coordinate assignments depend on internal texture orientation...
-        if (renderswap) {
+        // Override for special case: Corevideo texture from Quicktime-subsystem.
+        if (renderswap || source->targetSpecific.QuickTimeGLTexture) {
             // NEW CODE: Uses "normal" coordinate assignments, so that the rotation == 0 deg. case
             // is the fastest case --> Most common orientation has highest performance.
             //lower left
@@ -471,7 +504,7 @@ void PsychBlitTextureToDisplay(PsychWindowRecordType *source, PsychWindowRecordT
         glPopMatrix();
 
         // Unbind texture:
-	glBindTexture(GL_TEXTURE_RECTANGLE_EXT, NULL);
+	glBindTexture(GL_TEXTURE_RECTANGLE_EXT, 0);
         
         // Finished!
         return;

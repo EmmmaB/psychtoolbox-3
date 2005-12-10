@@ -17,6 +17,7 @@ HISTORY:
         04/22/05  mk            Added new flags to PsychWindowRecordType for stereo mode, skipped frames, IFI estimate and timestamping
                                 - These functions are mostly used by Screen('Flip') and Screen('DrawingFinished').
         07/22/05  mk            Removed constants for max number of windows. We resize dynamically now (see WindowBank.c)
+        10/11/05  mk            Support for special Quicktime movie textures in .targetSpecific part of PsychWindowRecord added.
  
 DESCRIPTION:
 
@@ -75,6 +76,7 @@ T0 DO:
 typedef struct{
         CGLContextObj		contextObject;
         CGLPixelFormatObj	pixelFormatObject;
+        CVOpenGLTextureRef      QuickTimeGLTexture;     // Used for textures returned by movie routines in PsychMovieSupport.c
 } PsychTargetSpecificWindowRecordType;
 
 #endif 
@@ -124,9 +126,12 @@ typedef struct _PsychWindowRecordType_{
 	boolean					stippleEnabled;
         
         int                                     stereomode;             // MK: Is this a stereo window? 0=non-stereo, >0 == specific type of stero.
+        int                                     stereodrawbuffer;       // MK: Which drawbuffer is active in stereo? 0=left, 1=right, 2=none
+        bool                                    auxbuffer_dirty[2];     // MK: State of auxbuffers 0 and 1: Dirty or not? (For stereo algs.)
         int                                     nrIFISamples;           // MK: nrIFISamples and IFIRunningSum are used to calculate an
         double                                  IFIRunningSum;          // MK: accurate estimate of the real interframe interval (IFI) in Flip.
 	double                                  time_at_last_vbl;       // MK: Timestamp (system-time) at last VBL detected by Flip.
+        double                                  VideoRefreshInterval;   // MK: Estimated video refresh interval of display. Can be different to IFI.
         int                                     VBL_Endline;            // MK: Estimated scanline which marks end of VBL area.
         bool                                    PipelineFlushDone;      // MK: Will be set by SCREENDrawingFinished to signal pipeline flush.
         bool                                    backBufferBackupDone;   // MK: Will be set by SCREENDrawingFinished to signal backbuffer backup.

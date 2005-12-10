@@ -112,6 +112,7 @@ void InitializeSynopsis()
 	
 	// Copy an image, very quickly, between textures and onscreen windows
 	synopsis[i++] = "\n% Copy an image, very quickly, between textures and onscreen windows.";
+        synopsis[i++] = "[resident [texidresident]] = Screen('PreloadTextures', windowPtr [, texids]);";
 	synopsis[i++] = "Screen('DrawTexture', windowPointer, texturePointer [,sourceRect] [,destinationRect] [,rotationAngle] [, filterMode] [, globalAlpha]);";	
 
 	// Copy an image, slowly, between matrices and windows
@@ -137,7 +138,7 @@ void InitializeSynopsis()
 	synopsis[i++] = "isOffscreen=Screen(windowPtr,'IsOffscreen');";
 	synopsis[i++] = "hz=Screen('FrameRate', windowPtrOrScreenNumber);";	
 	synopsis[i++] = "hz=Screen('NominalFrameRate', windowPtrOrScreenNumber);";	
-	synopsis[i++] = "[ monitorRefreshInterval nrValidSamples stddev ]=Screen('GetFlipInterval', windowPtr [, nrSamples] [, stddev] [, timeout]);";
+	synopsis[i++] = "[ monitorFlipInterval nrValidSamples stddev ]=Screen('GetFlipInterval', windowPtr [, nrSamples] [, stddev] [, timeout]);";
         synopsis[i++] = "screenNumber=Screen('WindowScreenNumber', windowPtr);";
 	synopsis[i++] = "rect=Screen('Rect', windowPtrOrScreenNumber);";
 	synopsis[i++] = "pixelSize=Screen('PixelSize', windowPtrOrScreenNumber);";
@@ -158,6 +159,7 @@ void InitializeSynopsis()
 	synopsis[i++] = "oldSecondsMultiplier=Screen('Preference', 'SecondsMultiplier');";
 	synopsis[i++] = "Screen('Preference','SkipSyncTests', skipTest);";
 	synopsis[i++] = "Screen('Preference','VisualDebugLevel', level (valid values between 0 and 5));";
+        synopsis[i++] = "Screen('Preference', 'ConserveVRAM', mode (valid values between 0 and 3));";
 		
 	//synopsis[i++] = "\n% Set clipping region (on- or off- screen):";
 	
@@ -174,7 +176,27 @@ void InitializeSynopsis()
 	synopsis[i++] =  "Screen('ClearTimelist');";
 	synopsis[i++] =  "Screen('Preference','DebugMakeTexture', enableDebugging);";
 	
-	synopsis[i++] = NULL;  //this tells PsychDisplayScreenSynopsis where to stop
+	// Movie and multimedia handling functions:
+//	synopsis[i++] = "\n% Movie and multimedia playback functions:";
+//	synopsis[i++] =  "[ moviePtr [count] [duration] [fps] [width] [height]]=Screen('OpenMovie', windowPtr, moviefile);";
+//	synopsis[i++] =  "Screen('CloseMovie', moviePtr);";
+//      synopsis[i++] =  "[ texturePtr [timeindex]]=Screen('GetMovieImage', windowPtr, moviePtr, [waitForImage], [fortimeindex]);";
+//	synopsis[i++] =  "[droppedframes] = Screen('PlayMovie', moviePtr, rate, [loop], [soundvolume]);";
+// 	synopsis[i++] =  "timeindex = Screen('GetMovieTimeIndex', moviePtr);";
+// 	synopsis[i++] =  "[oldtimeindex] = Screen('SetMovieTimeIndex', moviePtr, timeindex);";
+ 
+	// Low level OpenGL calls - directly translated to C via very thin wrapper functions:
+	synopsis[i++] = "\n% Low level direct access to OpenGL-API functions:";
+	synopsis[i++] = "% Online info for each function available by opening a terminal window";
+	synopsis[i++] = "% and typing 'man Functionname' + Enter.\n";
+        synopsis[i++] = "Screen('glPushMatrix', windowPtr);";
+        synopsis[i++] = "Screen('glPopMatrix', windowPtr);";
+        synopsis[i++] = "Screen('glLoadIdentity', windowPtr);";
+        synopsis[i++] = "Screen('glTranslate', windowPtr, tx, ty [, tz]);";
+        synopsis[i++] = "Screen('glScale', windowPtr, sx, sy [, sz]);";
+        synopsis[i++] = "Screen('glRotate', windowPtr, angle, [rx = 0], [ry = 0] ,[rz = 1]);";
+        
+        synopsis[i++] = NULL;  //this tells PsychDisplayScreenSynopsis where to stop
 	if (i > MAX_SYNOPSIS_STRINGS) {
 		PrintfExit("%s: increase dimension of synopsis[] from %ld to at least %ld and recompile.",__FILE__,(long)MAX_SYNOPSIS_STRINGS,(long)i);
 	}
