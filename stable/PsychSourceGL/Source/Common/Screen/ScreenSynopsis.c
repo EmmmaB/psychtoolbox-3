@@ -180,13 +180,13 @@ void InitializeSynopsis()
 	synopsis[i++] =  "Screen('Preference','DebugMakeTexture', enableDebugging);";
 	
 	// Movie and multimedia handling functions:
-//	synopsis[i++] = "\n% Movie and multimedia playback functions:";
-//	synopsis[i++] =  "[ moviePtr [count] [duration] [fps] [width] [height]]=Screen('OpenMovie', windowPtr, moviefile);";
-//	synopsis[i++] =  "Screen('CloseMovie', moviePtr);";
-//      synopsis[i++] =  "[ texturePtr [timeindex]]=Screen('GetMovieImage', windowPtr, moviePtr, [waitForImage], [fortimeindex]);";
-//	synopsis[i++] =  "[droppedframes] = Screen('PlayMovie', moviePtr, rate, [loop], [soundvolume]);";
-// 	synopsis[i++] =  "timeindex = Screen('GetMovieTimeIndex', moviePtr);";
-// 	synopsis[i++] =  "[oldtimeindex] = Screen('SetMovieTimeIndex', moviePtr, timeindex);";
+	synopsis[i++] = "\n% Movie and multimedia playback functions:";
+	synopsis[i++] =  "[ moviePtr [duration] [fps] [width] [height] [count]]=Screen('OpenMovie', windowPtr, moviefile);";
+	synopsis[i++] =  "Screen('CloseMovie', moviePtr);";
+        synopsis[i++] =  "[ texturePtr [timeindex]]=Screen('GetMovieImage', windowPtr, moviePtr, [waitForImage], [fortimeindex]);";
+	synopsis[i++] =  "[droppedframes] = Screen('PlayMovie', moviePtr, rate, [loop], [soundvolume]);";
+ 	synopsis[i++] =  "timeindex = Screen('GetMovieTimeIndex', moviePtr);";
+ 	synopsis[i++] =  "[oldtimeindex] = Screen('SetMovieTimeIndex', moviePtr, timeindex);";
  
 	// Low level OpenGL calls - directly translated to C via very thin wrapper functions:
 	synopsis[i++] = "\n% Low level direct access to OpenGL-API functions:";

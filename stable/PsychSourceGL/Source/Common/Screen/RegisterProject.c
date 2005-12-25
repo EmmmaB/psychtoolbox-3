@@ -172,12 +172,12 @@ PsychError PsychModuleInit(void)
 	PsychErrorExit(PsychRegister("DrawingFinished", &SCREENDrawingFinished));
         PsychErrorExit(PsychRegister("DrawLines", &SCREENDrawLines));
         PsychErrorExit(PsychRegister("GetFlipInterval", &SCREENGetFlipInterval));
-//        PsychErrorExit(PsychRegister("CloseMovie", &SCREENCloseMovie));
-//        PsychErrorExit(PsychRegister("OpenMovie", &SCREENOpenMovie));
-//        PsychErrorExit(PsychRegister("PlayMovie", &SCREENPlayMovie));
-//        PsychErrorExit(PsychRegister("SetMovieTimeIndex", &SCREENSetMovieTimeIndex));
-//        PsychErrorExit(PsychRegister("GetMovieTimeIndex", &SCREENGetMovieTimeIndex));
-//        PsychErrorExit(PsychRegister("GetMovieImage", &SCREENGetMovieImage));
+        PsychErrorExit(PsychRegister("CloseMovie", &SCREENCloseMovie));
+        PsychErrorExit(PsychRegister("OpenMovie", &SCREENOpenMovie));
+        PsychErrorExit(PsychRegister("PlayMovie", &SCREENPlayMovie));
+        PsychErrorExit(PsychRegister("SetMovieTimeIndex", &SCREENSetMovieTimeIndex));
+        PsychErrorExit(PsychRegister("GetMovieTimeIndex", &SCREENGetMovieTimeIndex));
+        PsychErrorExit(PsychRegister("GetMovieImage", &SCREENGetMovieImage));
         PsychErrorExit(PsychRegister("glPushMatrix", &SCREENglPushMatrix));
         PsychErrorExit(PsychRegister("glPopMatrix", &SCREENglPopMatrix));
         PsychErrorExit(PsychRegister("glLoadIdentity", &SCREENglLoadIdentity));
@@ -205,7 +205,7 @@ PsychError PsychModuleInit(void)
 	InitializeSynopsis();
 	InitializePsychDisplayGlue();
 	InitWindowBank();
-//	PsychMovieInit();
+	PsychMovieInit();
         
 	PrepareScreenPreferences();
         
