@@ -95,8 +95,8 @@
 					PBXFileDataSource_Warnings_ColumnID,
 				);
 			};
-			PBXPerProjectTemplateStateSaveDate = 157256522;
-			PBXWorkspaceStateSaveDate = 157256522;
+			PBXPerProjectTemplateStateSaveDate = 160725118;
+			PBXWorkspaceStateSaveDate = 160725118;
 		};
 		sourceControlManager = 83C94918092818FF0062DB0A /* Source Control */;
 		userBuildSettings = {
@@ -186,16 +186,16 @@
 	};
 	2F66ABC309063E4E00128812 /* SCREENDrawText.c */ = {
 		uiCtxt = {
-			sepNavIntBoundsRect = "{{0, 0}, {1220, 5012}}";
-			sepNavSelRange = "{1251, 0}";
-			sepNavVisRect = "{{0, 129}, {874, 708}}";
+			sepNavIntBoundsRect = "{{0, 0}, {1220, 8330}}";
+			sepNavSelRange = "{16099, 0}";
+			sepNavVisRect = "{{0, 3400}, {874, 708}}";
 		};
 	};
 	2F742337068A830200D66E0C /* ScreenPreferenceState.c */ = {
 		uiCtxt = {
 			sepNavIntBoundsRect = "{{0, 0}, {1124, 2744}}";
-			sepNavSelRange = "{4574, 0}";
-			sepNavVisRect = "{{0, 1974}, {874, 708}}";
+			sepNavSelRange = "{1893, 0}";
+			sepNavVisRect = "{{0, 121}, {874, 708}}";
 		};
 	};
 	2F74235E068A842B00D66E0C /* ScreenPreferenceState.h */ = {
@@ -1186,7 +1186,7 @@
 		uiCtxt = {
 			sepNavIntBoundsRect = "{{0, 0}, {1364, 25158}}";
 			sepNavSelRange = "{21774, 0}";
-			sepNavVisRect = "{{0, 24450}, {874, 708}}";
+			sepNavVisRect = "{{0, 20163}, {874, 708}}";
 		};
 	};
 	F5CC1B2103949058017A7028 /* ScreenArguments.h */ = {

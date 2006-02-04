@@ -40,7 +40,7 @@ static Boolean                                                          textAlph
 static Boolean                                                          screenSkipSyncTests=FALSE;
 //Debug preference state
 static Boolean                                                          TimeMakeTextureFlag=FALSE;
-static int								screenVisualDebugLevel=6;
+static int								screenVisualDebugLevel=4;
 static int                                                              screenConserveVRAM=0;
 
 
