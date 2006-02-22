@@ -323,8 +323,8 @@ boolean PsychOpenOnscreenWindow(PsychScreenSettingsType *screenSettings, PsychWi
     (*windowRecord)->depth=PsychGetScreenDepthValue(screenSettings->screenNumber);
  
     if (true) {
-        printf("\n\nPTB-INFO: This is Screen bugfix release 2 of Psychtoolbox 1.0.6\n\n");
-        printf("Fixed bugs: All known DrawText bugs plus bugs 5746 and 5690 (see http://developer.berlios.de/bugs/?group_id=5064 )\n");
+        printf("\n\nPTB-INFO: This is Screen bugfix release 3 of Psychtoolbox 1.0.6\n\n");
+        printf("Fixed bugs: All known DrawText bugs plus bugs 5746 and 5690 as well as an alpha blending bug for RGBA textures (see http://developer.berlios.de/bugs/?group_id=5064 )\n");
     }
     
     // Check if the graphics hardware supports all required OpenGL-Extensions:
