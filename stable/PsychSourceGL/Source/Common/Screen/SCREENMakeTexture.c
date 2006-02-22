@@ -290,10 +290,10 @@ PsychError SCREENMakeTexture(void)
         bp=(double*) ((unsigned long long) gp + (unsigned long long) iters*sizeof(double));
         ap=(double*) ((unsigned long long) bp + (unsigned long long) iters*sizeof(double));
         for(ix=0;ix<iters;ix++){
+            *(texturePointer_b++)= (GLubyte) *(ap++);  
             *(texturePointer_b++)= (GLubyte) *(rp++);  
             *(texturePointer_b++)= (GLubyte) *(gp++);  
             *(texturePointer_b++)= (GLubyte) *(bp++);  
-            *(texturePointer_b++)= (GLubyte) *(ap++);  
         }
         textureRecord->depth=32;
     }
@@ -327,10 +327,10 @@ PsychError SCREENMakeTexture(void)
         bp=(GLubyte*) ((unsigned long long) gp + (unsigned long long) iters);
         ap=(GLubyte*) ((unsigned long long) bp + (unsigned long long) iters);
         for(ix=0;ix<iters;ix++){
+            *(texturePointer_b++)= *(ap++);  
             *(texturePointer_b++)= *(rp++);  
             *(texturePointer_b++)= *(gp++);  
             *(texturePointer_b++)= *(bp++);  
-            *(texturePointer_b++)= *(ap++);  
         }
         textureRecord->depth=32;
     }
