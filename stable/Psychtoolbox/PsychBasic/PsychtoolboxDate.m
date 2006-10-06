@@ -6,5 +6,6 @@ function d=PsychtoolboxDate
 % 12/3/04   awi    Copied into OS X  PTB. Added history comments.  
 
 global Psychtoolbox
-PsychtoolboxVersion; % Load the Psychtoolbox struct.
-d=Psychtoolbox.date;
+%PsychtoolboxVersion; % Load the Psychtoolbox struct.
+%d=Psychtoolbox.date;
+d='6 October 2006';

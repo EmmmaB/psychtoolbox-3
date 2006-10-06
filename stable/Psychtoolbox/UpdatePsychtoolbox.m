@@ -33,6 +33,12 @@ function UpdatePsychtoolbox(targetdirectory, targetRevision)
 %             Changed default to use WHICH instead of PWD as
 %             targetdirectory. Update MATLAB path. Expand comments.
 % 5/08/06 mk  Small fixes. Added option to downgrade to a specific revision.
+% 9/23/06 mk  Add clear mex call to flush mex files before updating.
+% 10/5/06 mk  Add detection code for MacOS-X on Intel Macs.
+
+% Flush all MEX files: This is needed at least on M$-Windows for SVN to
+% work if Screen et al. are still loaded.
+clear mex
 
 if nargin<1
     targetdirectory=fileparts(which(fullfile('Psychtoolbox','Contents.m')));
@@ -41,16 +47,21 @@ end
 if nargin<2
     targetRevision = '';
 else
-    targetRevision
+    fprintf('Target revision: %s \n', targetRevision);
     targetRevision = [' -r ' targetRevision ' '];
 end
 
-fprintf(['UpdatePsychtoolbox(''' targetdirectory ''')\n']);
+fprintf('UpdatePsychtoolbox('' %s '') \n', targetdirectory);
 fprintf('\n');
+
+% Do not accept path names with blanks in them:
+if any(isspace(targetdirectory))
+    error('The targetdirectory spec contains white-space. This is not allowed!');
+end
 
 % Check OS
 isWin=strcmp(computer,'PCWIN');
-isOSX=strcmp(computer,'MAC');
+isOSX=strcmp(computer,'MAC') | strcmp(computer,'MACI');
 if ~isWin && ~isOSX
     os=computer;
     if strcmp(os,'MAC2')
@@ -65,7 +76,7 @@ if ~isWin && ~isOSX
 end
 
 % Save old Psychtoolbox path
-oldPath=genpath(targetdirectory);
+oldPath = RemoveSVNPaths(genpath(targetdirectory));
 
 % Check that subversion client is installed.
 % Currently, we only know how to check this for Mac OSX.
@@ -120,11 +131,16 @@ addpath(genpath(targetdirectory));
 fprintf('Your MATLAB path has been updated. Now trying to save the new MATLAB path...\n\n');
 
 % Does SAVEPATH work?
-err=savepath;
+if exist('savepath')
+   err=savepath;
+else
+   err=path2rc;
+end
+
 if err
 p=fullfile(matlabroot,'toolbox','local','pathdef.m');
 fprintf(['Sorry, SAVEPATH failed. Probably the pathdef.m file lacks write permission. \n'...
-    'Please ask a user with administrator privileges to enable \n'...
+        'Please ask a user with administrator privileges to enable \n'...
         'write by everyone for the file:\n''%s''\n'],p);
 fprintf(['Once that''s done, run ' mfilename ' again. For this MATLAB session, Psychtoolbox\n']);
 fprintf('will be fully functional, but you will need to save your path settings to make them persistent.\n\n');
@@ -132,5 +148,12 @@ error('SAVEPATH failed. Please get an administrator to allow everyone to write p
 end
 
 fprintf('Fully done. Your new Psychtoolbox folder is ready to use. Enjoy!\n\n')
+
+% Does a post-install routine exist? If so, we execute it, now that PTB is basically ready.
+if exist('PsychtoolboxPostInstallRoutine.m', 'file')
+   % We pass the information about downloaded flavor and that this is a download (=0) to the
+   % post-install routine...
+   PsychtoolboxPostInstallRoutine(1);
+end;
 
 return

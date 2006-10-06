@@ -330,8 +330,10 @@ boolean PsychOpenOnscreenWindow(PsychScreenSettingsType *screenSettings, PsychWi
     (*windowRecord)->depth=PsychGetScreenDepthValue(screenSettings->screenNumber);
  
     if (true) {
-      printf("\n\nPTB-INFO: This is the current stable preview of Screen for PTB 1.0.7\n");
-      printf("PTB-INFO: This is a snapshot of work in progress - more features may be added before official release 1.0.7\n\n");
+            printf("\n\nPTB-INFO: This is the OpenGL-Psychtoolbox version 3.0.7 ");
+            printf("Type 'PsychtoolboxVersion' for more detailed version information.\n"); 
+            printf("PTB-INFO: Psychtoolbox is licensed to you under terms of the GNU General Public License (GPL). See file 'License.txt' in the\n");
+            printf("PTB-INFO: Psychtoolbox root folder for a copy of the GPL license.\n\n");
     }
 
     // Check if the graphics hardware supports all required OpenGL-Extensions:
