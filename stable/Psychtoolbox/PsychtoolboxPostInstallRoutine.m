@@ -65,17 +65,6 @@ else
     end
 end
 
-% Get rid of any remaining .svn folders in the path.
-try
-    path(RemoveSVNPaths);
-    if exist('savepath')
-        savepath;
-    else
-        path2rc;
-    end
-catch
-    fprintf('Info: Failed to remove .svn subfolders from path. Not a big deal...\n');
-end
 
 % Try to execute online registration routine: This should be fail-safe in case
 % of no network connection.
