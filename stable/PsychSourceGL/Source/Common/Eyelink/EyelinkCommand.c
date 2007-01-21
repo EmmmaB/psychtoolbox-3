@@ -14,6 +14,7 @@
 	HISTORY:
 
 		11/23/05  cdb		Created.
+		30-10-06	fwc		does now actually output status
 
 	TARGET LOCATION:
 
@@ -74,7 +75,8 @@ PsychError EyelinkCommand(void)
 
 	// Check arguments
 	PsychErrorExit(PsychRequireNumInputArgs(1));
-	PsychErrorExit(PsychCapNumOutputArgs(0));
+//	PsychErrorExit(PsychCapNumOutputArgs(0));
+	PsychErrorExit(PsychCapNumOutputArgs(1));
 	
 	// Verify eyelink is up and running
 	EyelinkSystemIsConnected();
@@ -125,3 +127,4 @@ PsychError EyelinkCommand(void)
    
 	return(PsychError_none);
 }
+

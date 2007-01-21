@@ -81,10 +81,20 @@ void PsychPrefStateSet_3DGfx(Boolean level);
 Boolean PsychPrefStateGet_DebugMakeTexture(void);
 void PsychPrefStateSet_DebugMakeTexture(Boolean setFlag);
 
+// Master switch for debug output:
 Boolean PsychPrefStateGet_SuppressAllWarnings(void);
 void PsychPrefStateSet_SuppressAllWarnings(Boolean setFlag);
+
+// Level of verbosity:
+int PsychPrefStateGet_Verbosity(void);
+void PsychPrefStateSet_Verbosity(int level);
+
+// Master control for method of flip and vbl timestamping:
+int PsychPrefStateGet_VBLTimestampingMode(void);
+void PsychPrefStateSet_VBLTimestampingMode(int level);
 
 
 //end include once
 #endif
+
 

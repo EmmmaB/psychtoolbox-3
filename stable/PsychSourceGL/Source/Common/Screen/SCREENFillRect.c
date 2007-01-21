@@ -80,6 +80,8 @@ PsychError SCREENFillRect(void)
 	isScreenRect=FALSE;
 	isArgThere=PsychCopyInRectArg(kPsychUseDefaultArgPosition, FALSE, rect);	
 	isScreenRect= !isArgThere || isArgThere && PsychMatchRect(rect, windowRecord->rect);
+	if (isArgThere && IsPsychRectEmpty(rect)) return(PsychError_none);
+
 	PsychSetGLContext(windowRecord);
    // Enable this windowRecords framebuffer as current drawingtarget:
    PsychSetDrawingTarget(windowRecord);
@@ -91,12 +93,12 @@ PsychError SCREENFillRect(void)
       // We only use this fast-path on real onscreen windows, not on textures or
       // offscreen windows.
 		dVals[3]=1.0;
-		PsychConvertColorAndDepthToDoubleVector(&color, depthValue, dVals);
+		PsychConvertColorToDoubleVector(&color, windowRecord, dVals);
 		glClearColor(dVals[0], dVals[1], dVals[2], dVals[3]);
 		glClear(GL_COLOR_BUFFER_BIT);
 	}else{
 		// Subregion fill or fullscreen fill into offscreen window or texture: Draw a colored rect.
-		PsychSetGLColor(&color, depthValue);
+		PsychSetGLColor(&color, windowRecord);
 
 		if (isScreenRect) {
 			// Fullscreen fill of a non-onscreen window:
@@ -113,6 +115,7 @@ PsychError SCREENFillRect(void)
  	//All psychfunctions require this.
 	return(PsychError_none);
 }
+
 
 
 

@@ -131,6 +131,8 @@ PsychError SCREENOpenOffscreenWindow(void)
     //Depth and rect argument supplied as arguments override those inherited from reference screen or window.
     //Note that PsychCopyIn* prefix means that value will not be overwritten if the arguments are not present.
     PsychCopyInRectArg(3,FALSE, rect);
+    if (IsPsychRectEmpty(rect)) PsychErrorExitMsg(PsychError_user, "Invalid rect value provided: Empty rects are not allowed.");
+
     PsychCopyInIntegerArg(4,FALSE, &depth); 
 
     // If any of the no longer supported values 0, 1, 2 or 4 is provided, we
@@ -218,6 +220,9 @@ PsychError SCREENOpenOffscreenWindow(void)
     // Setup associated OpenGL context:
     windowRecord->targetSpecific.contextObject = targetWindow->targetSpecific.contextObject;
 	 windowRecord->targetSpecific.deviceContext = targetWindow->targetSpecific.deviceContext;
+	 
+	// Copy color range and mode from parent window:
+	windowRecord->colorRange = targetWindow->colorRange;
 
     // Texture orientation is type 2 aka upright, non-transposed aka Offscreen window:
     windowRecord->textureOrientation = 2;
@@ -235,3 +240,4 @@ PsychError SCREENOpenOffscreenWindow(void)
     // Ready.
     return(PsychError_none);
 }
+

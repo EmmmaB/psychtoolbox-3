@@ -29,7 +29,8 @@
 
 // Eyelink Includes
 #include "eyelink.h"
-
+// MK: core_expt.h must be included for M$-Windows build:
+#include "core_expt.h"
 
 /////////////////////////////////////////////////////////////////////////
 // Global variables used throughout eyelink C files
@@ -38,6 +39,13 @@ extern int		giSystemInitialized;
 
 /////////////////////////////////////////////////////////////////////////
 //		Eyelink Function prototypes
+
+// Defined in EyelinkCreateDataStructs.c
+mxArray *CreateMXFSample(const FSAMPLE *fs);
+mxArray *CreateMXFSampleRaw(const FSAMPLE_RAW *fs);
+mxArray *CreateMXISample(const ISAMPLE *is);
+mxArray *CreateMXFEvent(const FEVENT *fe);
+mxArray *CreateMXIEvent(const IEVENT *ie);
 
 // Defined in PsychEyelink.c
 PsychError	EyelinkSystemIsConnected(void);
@@ -82,5 +90,11 @@ PsychError EyelinkRequestTime(void);
 PsychError EyelinkReceiveFile(void);
 PsychError EyelinkGetTrackerVersion(void);
 
+PsychError EyelinkNewestFloatSampleRaw(void);
+PsychError EyelinkGetNextDataType(void);
+PsychError EyelinkGetFloatData(void);
+
+
 // PSYCH_IS_INCLUDED_Eyelink
 #endif 
+

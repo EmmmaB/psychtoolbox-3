@@ -72,6 +72,7 @@ PsychError SCREENFrameRect(void)
 	//get the rect
 	PsychCopyRect(rect, windowRecord->rect);
 	PsychCopyInRectArg(3, FALSE, rect);
+	if (IsPsychRectEmpty(rect)) return(PsychError_none);
 	
 	//get the pen size
 	penSize=1;
@@ -84,7 +85,7 @@ PsychError SCREENFrameRect(void)
 
 	glLineWidth((GLfloat)penSize);
 	PsychUpdateAlphaBlendingFactorLazily(windowRecord);
-	PsychSetGLColor(&color, depthValue);
+	PsychSetGLColor(&color, windowRecord);
 	glBegin(GL_LINE_LOOP);
 		glVertex2d(rect[kPsychLeft], rect[kPsychBottom]);
 		glVertex2d(rect[kPsychLeft], rect[kPsychTop]);
@@ -97,6 +98,7 @@ PsychError SCREENFrameRect(void)
 
 	return(PsychError_none);
 }
+
 
 
 

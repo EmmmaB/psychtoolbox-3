@@ -144,6 +144,8 @@ void PsychRenderArc(unsigned int mode)
         // Get the rect to which the object should be inscribed: Default is "full screen"
         PsychMakeRect(rect, 0, 0, PsychGetWidthFromRect(windowRecord->rect), PsychGetHeightFromRect(windowRecord->rect));
         PsychCopyInRectArg(3, FALSE, rect);
+	if (IsPsychRectEmpty(rect)) return(PsychError_none);
+
         w=PsychGetWidthFromRect(rect);
         h=PsychGetHeightFromRect(rect);
 
@@ -176,7 +178,7 @@ void PsychRenderArc(unsigned int mode)
         PsychSetDrawingTarget(windowRecord);
 
 	PsychUpdateAlphaBlendingFactorLazily(windowRecord);
-	PsychSetGLColor(&color, depthValue);
+	PsychSetGLColor(&color,  windowRecord);
         
         // Backup our modelview matrix:
         glMatrixMode(GL_MODELVIEW);
@@ -213,6 +215,7 @@ void PsychRenderArc(unsigned int mode)
 
 	return;
 }
+
 
 
 

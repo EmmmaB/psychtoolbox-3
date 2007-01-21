@@ -49,6 +49,19 @@
 
 #include "Screen.h"
 
+// Includes for low-level access to IOKit Framebuffer device:
+#include <CoreFoundation/CoreFoundation.h>
+#include <ApplicationServices/ApplicationServices.h>
+#include <IOKit/graphics/IOGraphicsLib.h>
+#include <IOKit/graphics/IOFramebufferShared.h>
+
+static struct {
+    io_connect_t        connect;
+    StdFBShmem_t *      shmem;
+    vm_size_t           shmemSize;    
+} fbsharedmem[kPsychMaxPossibleDisplays];   
+
+
 /** PsychRealtimePriority: Temporarily boost priority to THREAD_TIME_CONSTRAINT_POLICY.
     PsychRealtimePriority(true) enables realtime-scheduling (like Priority(9) would do in Matlab).
     PsychRealtimePriority(false) restores scheduling to the state before last invocation of PsychRealtimePriority(true),
@@ -187,9 +200,12 @@ boolean PsychOSOpenOnscreenWindow(PsychScreenSettingsType *screenSettings, Psych
     CGOpenGLDisplayMask 			displayMask;
     CGLError					error;
     CGDirectDisplayID				cgDisplayID;
-    CGLPixelFormatAttribute			attribs[24];
+    CGLPixelFormatAttribute			attribs[32];
     long					numVirtualScreens;
-    GLboolean					isDoubleBuffer;
+    GLboolean					isDoubleBuffer, isFloatBuffer;
+    GLint bpc;
+	GLenum glerr;
+	
     int attribcount=0;
     int i;
 
@@ -200,6 +216,41 @@ boolean PsychOSOpenOnscreenWindow(PsychScreenSettingsType *screenSettings, Psych
     attribs[attribcount++]=kCGLPFAFullScreen;
     attribs[attribcount++]=kCGLPFADisplayMask;
     attribs[attribcount++]=displayMask;
+
+    // 10 bit per component framebuffer requested (10-10-10-2)?
+    if (windowRecord->depth == 30) {
+      // Request a 10 bit per color component framebuffer with 2 bit alpha channel:
+      printf("PTB-INFO: Trying to enable 10 bpc framebuffer...\n");
+	  attribs[attribcount++]=kCGLPFANoRecovery;
+	  attribs[attribcount++]=kCGLPFAAccelerated;
+      attribs[attribcount++]=kCGLPFAColorSize;
+      attribs[attribcount++]=16*3;
+      attribs[attribcount++]=kCGLPFAAlphaSize;
+      attribs[attribcount++]=16;
+    }
+
+    // 16 bit per component, 64 bit framebuffer requested (16-16-16-16)?
+    if (windowRecord->depth == 64) {
+      // Request a floating point framebuffer in 16-bit half-float format, i.e., RGBA = 16 bits per component.
+      printf("PTB-INFO: Trying to enable 16 bpc float framebuffer...\n");
+      attribs[attribcount++]=kCGLPFAColorFloat;
+      attribs[attribcount++]=kCGLPFAColorSize;
+      attribs[attribcount++]=16*3;
+      attribs[attribcount++]=kCGLPFAAlphaSize;
+      attribs[attribcount++]=16;
+    }
+
+    // 32 bit per component, 128 bit framebuffer requested (32-32-32-32)?
+    if (windowRecord->depth == 128) {
+      // Request a floating point framebuffer in 32-bit float format, i.e., RGBA = 32 bits per component.
+      printf("PTB-INFO: Trying to enable 32 bpc float framebuffer...\n");
+      attribs[attribcount++]=kCGLPFAColorFloat;
+      attribs[attribcount++]=kCGLPFAColorSize;
+      attribs[attribcount++]=32*3;
+      attribs[attribcount++]=kCGLPFAAlphaSize;
+      attribs[attribcount++]=32;
+    }
+
     // Support for 3D rendering requested?
     if (PsychPrefStateGet_3DGfx()) {
         // Yes. Allocate a 24-Bit depth and 8-Bit stencilbuffer for this purpose:
@@ -291,6 +342,19 @@ boolean PsychOSOpenOnscreenWindow(PsychScreenSettingsType *screenSettings, Psych
         return(FALSE);
     }
     
+	// Ok, the OpenGL rendering context is up and running. Auto-detect and bind all
+	// available OpenGL extensions via GLEW:
+	glerr = glewInit();
+	if (GLEW_OK != glerr)
+	{
+		/* Problem: glewInit failed, something is seriously wrong. */
+		printf("\nPTB-ERROR[GLEW init failed: %s]: Please report this to the forum. Will try to continue, but may crash soon!\n\n", glewGetErrorString(glerr));
+		fflush(NULL);
+	}
+	else {
+		if (PsychPrefStateGet_Verbosity()>3) printf("PTB-INFO: Using GLEW version %s for automatic detection of OpenGL extensions...\n", glewGetString(GLEW_VERSION));
+	}
+	
     // Enable multisampling if it was requested:
     if (windowRecord->multiSample > 0) glEnable(GL_MULTISAMPLE);
     
@@ -307,11 +371,74 @@ boolean PsychOSOpenOnscreenWindow(PsychScreenSettingsType *screenSettings, Psych
             return(FALSE);
         }
     }
+    
+    
+    // Initialize a low-level mapping of Framebuffer device data structures into
+    // our address space: Needed for additional timing checks:
 
+    // Initialize to safe default:
+    fbsharedmem[screenSettings->screenNumber].shmem = NULL;
+
+    // A value of zero would forcefully disable this method:
+    if (PsychPrefStateGet_VBLTimestampingMode()>0) {
+        // Get access to Mach service port for the physical display device associated
+        // with this onscreen window and open our own connection to the port:
+        if ((kIOReturnSuccess == IOServiceOpen(CGDisplayIOServicePort(cgDisplayID), mach_task_self(), kIOFBSharedConnectType, &(fbsharedmem[screenSettings->screenNumber].connect))) ||
+            (kIOReturnSuccess == IOServiceOpen(CGDisplayIOServicePort(CGMainDisplayID()), mach_task_self(), kIOFBSharedConnectType, &(fbsharedmem[screenSettings->screenNumber].connect)))) {
+            // Connection established.
+
+            // Create shared memory region:
+            if (TRUE || kIOReturnSuccess == IOFBCreateSharedCursor(fbsharedmem[screenSettings->screenNumber].connect, kIOFBCurrentShmemVersion, 32, 32)) {
+                // Map the slice of device memory into our VM space:
+                if (kIOReturnSuccess != IOConnectMapMemory(fbsharedmem[screenSettings->screenNumber].connect, kIOFBCursorMemory, mach_task_self(),
+                                                           (vm_address_t *) &(fbsharedmem[screenSettings->screenNumber].shmem),
+                                                           &(fbsharedmem[screenSettings->screenNumber].shmemSize), kIOMapAnywhere)) {
+                    // Mapping failed!
+                    fbsharedmem[screenSettings->screenNumber].shmem = NULL;
+                    if (PsychPrefStateGet_Verbosity()>1) printf("PTB-WARNING: Failed to gain access to kernel-level vbl handler [IOConnectMapMemory()] - Fallback path for time stamping won't be available.\n");
+                }
+                else {
+                    if (PsychPrefStateGet_Verbosity()>3) printf("PTB-INFO: Connection to kernel-level vbl handler establised (shmem = %p).\n",  fbsharedmem[screenSettings->screenNumber].shmem);
+                }
+            }
+            else {
+                if (PsychPrefStateGet_Verbosity()>1) printf("PTB-WARNING: Failed to gain access to kernel-level vbl handler [IOFBCreateSharedCursor()] - Fallback path for time stamping won't be available.\n");
+            }
+        }
+        else {
+            if (PsychPrefStateGet_Verbosity()>1) printf("PTB-WARNING: Failed to gain access to kernel-level vbl handler [IOServiceOpen()] - Fallback path for time stamping won't be available.\n");
+        }
+        
+        // If the mapping worked, we have a pointer to the driver memory in .shmem, otherwise we have NULL:
+    }
+    
     // Done.
     return(TRUE);
 }
 
+/*
+    PsychOSGetVBLTimeAndCount()
+
+    Returns absolute system time of last VBL and current total count of VBL interrupts since
+    startup of gfx-system for the given screen. Returns a time of -1 and a count of 0 if this
+    feature is unavailable on the given OS/Hardware configuration.
+*/
+double PsychOSGetVBLTimeAndCount(unsigned int screenid, psych_uint64* vblCount)
+{
+    // Do we have a valid shared mapping?
+    if (fbsharedmem[screenid].shmem) {
+        // Retrieve absolute count of vbls since startup:
+        *vblCount = (psych_uint64) fbsharedmem[screenid].shmem->vblCount;
+        
+        // Retrieve absolute system time of last retrace, convert into PTB standard time system and return it:
+	return(((double) UnsignedWideToUInt64(AbsoluteToNanoseconds(fbsharedmem[screenid].shmem->vblTime))) / 1000000000.0);
+    }
+    else {
+        // Unsupported :(
+        *vblCount = 0;
+        return(-1);
+    }
+}
 
 /*
     PsychOSOpenOffscreenWindow()
@@ -371,6 +498,8 @@ boolean PsychOSOpenOffscreenWindow(double *rect, int depth, PsychWindowRecordTyp
 
 void PsychOSCloseWindow(PsychWindowRecordType *windowRecord)
 {    
+    CGDirectDisplayID				cgDisplayID;
+
     // Disable rendering context:
     CGLSetCurrentContext(NULL);
  
@@ -388,6 +517,23 @@ void PsychOSCloseWindow(PsychWindowRecordType *windowRecord)
     // Destroy rendering context:
     CGLDestroyContext(windowRecord->targetSpecific.contextObject);
 
+    // Disable low-level mapping of framebuffer cursor memory:
+    if (PsychPrefStateGet_VBLTimestampingMode()>0) {
+        // Map screen number to physical display handle cgDisplayID:
+        PsychGetCGDisplayIDFromScreenNumber(&cgDisplayID, windowRecord->screenNumber);
+        
+        // Unmap memory from our VM space, if any mapped:
+        if (fbsharedmem[windowRecord->screenNumber].shmem) {
+            IOConnectUnmapMemory(fbsharedmem[windowRecord->screenNumber].connect, kIOFBCursorMemory, mach_task_self(), (vm_address_t) fbsharedmem[windowRecord->screenNumber].shmem);
+            fbsharedmem[windowRecord->screenNumber].shmem = NULL;
+        }
+        
+        // Close the service port:
+        IOServiceClose(fbsharedmem[windowRecord->screenNumber].connect);  
+
+        // Cleanup done.
+    }
+    
     return;
 }
 
@@ -432,6 +578,7 @@ void PsychOSSetVBLSyncLevel(PsychWindowRecordType *windowRecord, int swapInterva
     long myinterval = (long) swapInterval;
     error=CGLSetParameter(windowRecord->targetSpecific.contextObject, kCGLCPSwapInterval, &myinterval);
     if (error) {
-        printf("\nPTB-WARNING: FAILED to enable synchronization to vertical retrace!\n\n");
+        if (PsychPrefStateGet_Verbosity()>1) printf("\nPTB-WARNING: FAILED to enable synchronization to vertical retrace!\n\n");
     }
 }
+

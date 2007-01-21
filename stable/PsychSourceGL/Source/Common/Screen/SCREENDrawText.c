@@ -133,6 +133,16 @@ PsychError SCREENDrawText(void)
     double			quadLeft, quadRight, quadTop, quadBottom;
     int				psychColorSize;
     GLenum			normalSourceBlendFactor, normalDestinationBlendFactor;
+	int ix;
+	GLubyte* rpb;
+	Boolean bigendian;
+	
+	// Detect endianity (byte-order) of machine:
+    ix=255;
+    rpb=(GLubyte*) &ix;
+    bigendian = ( *rpb == 255 ) ? FALSE : TRUE;
+    ix = 0; rpb = NULL;
+
     
     //for layout attributes.  (not the same as run style attributes set by PsychSetATSUTStyleAttributes or line attributes which we do not set.) 	
     ATSUAttributeTag		saTags[] =  {kATSUCGContextTag };
@@ -255,7 +265,7 @@ PsychError SCREENDrawText(void)
     quartzRect.size.height=(float)textureHeight;
     psychColorSize=PsychGetColorSizeFromWindowRecord(winRec);
     PsychCoerceColorModeWithDepthValue(kPsychRGBAColor, psychColorSize, &(winRec->textAttributes.textBackgroundColor));
-    PsychConvertColorAndColorSizeToDoubleVector(&(winRec->textAttributes.textBackgroundColor), psychColorSize, backgroundColorVector);
+    PsychConvertColorToDoubleVector(&(winRec->textAttributes.textBackgroundColor), winRec, backgroundColorVector);
     //by default override the background alpha value, setting alpha transparecy. Only when DrawText obeys the alpha blend function setting do we need or want the the alpha argument for the background.
     if(!PsychPrefStateGet_TextAlphaBlending())
         backgroundColorVector[3]=0;
@@ -300,7 +310,7 @@ PsychError SCREENDrawText(void)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
     PsychTestForGLErrors();
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA,  (GLsizei)textureWidth, (GLsizei)textureHeight, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, textureMemory);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA,  (GLsizei)textureWidth, (GLsizei)textureHeight, 0, GL_BGRA, (bigendian) ? GL_UNSIGNED_INT_8_8_8_8_REV : GL_UNSIGNED_INT_8_8_8_8, textureMemory);
     free((void *)textureMemory);	// Free the texture memory: OpenGL has its own copy now in internal buffers.
     textureMemory = NULL;
     
@@ -649,7 +659,7 @@ PsychError SCREENDrawText(void)
     PsychSetDrawingTarget(winRec);
 
 	 PsychCoerceColorModeFromSizes(numColorPlanes, colorPlaneSize, &(winRec->textAttributes.textColor));
-    PsychSetGLColor(&(winRec->textAttributes.textColor), depthValue);
+    PsychSetGLColor(&(winRec->textAttributes.textColor), winRec);
 
     // Does the font (better, its display list) need to be build or rebuild, because
     // font name, size or settings have changed?
@@ -720,3 +730,4 @@ PsychError SCREENDrawText(void)
 }
 
 #endif
+

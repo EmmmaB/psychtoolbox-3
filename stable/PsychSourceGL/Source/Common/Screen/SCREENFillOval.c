@@ -76,8 +76,9 @@ PsychError SCREENFillOval(void)
 
 	//get the rect value
 	isArgThere=PsychCopyInRectArg(kPsychUseDefaultArgPosition, FALSE, rect);
-	if(!isArgThere)
-		PsychCopyRect(rect, windowRecord->rect);
+	if(!isArgThere) PsychCopyRect(rect, windowRecord->rect);
+	if (IsPsychRectEmpty(rect)) return(PsychError_none);
+
 
 	//The glu disk object location and size with a  center point and a radius,   
 	//whereas FillOval accepts a bounding rect.   Converting from one set of parameters
@@ -107,7 +108,7 @@ PsychError SCREENFillOval(void)
         PsychSetDrawingTarget(windowRecord);
 
 	PsychUpdateAlphaBlendingFactorLazily(windowRecord);
-	PsychSetGLColor(&color, depthValue);
+	PsychSetGLColor(&color,  windowRecord);
         
 	//Draw  
 	glPushMatrix();
@@ -124,6 +125,7 @@ PsychError SCREENFillOval(void)
  	//All psychfunctions require this.
 	return(PsychError_none);
 }
+
 
 
 

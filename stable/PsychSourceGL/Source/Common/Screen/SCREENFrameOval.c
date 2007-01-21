@@ -95,8 +95,8 @@ PsychError SCREENFrameOval(void)
 
 	//get the rect value
 	isArgThere=PsychCopyInRectArg(kPsychUseDefaultArgPosition, FALSE, rect);
-	if(!isArgThere)
-		PsychCopyRect(rect, windowRecord->rect);
+	if(!isArgThere) PsychCopyRect(rect, windowRecord->rect);
+	if (IsPsychRectEmpty(rect)) return(PsychError_none);
             
 	//get the pen width and height arguments
 	penWidth=1;
@@ -134,7 +134,7 @@ PsychError SCREENFrameOval(void)
         PsychSetDrawingTarget(windowRecord);
 
 	PsychUpdateAlphaBlendingFactorLazily(windowRecord);
-	PsychSetGLColor(&color, depthValue);
+	PsychSetGLColor(&color, windowRecord);
 	//glEnable(GL_POLYGON_SMOOTH);
         //Draw the rect.  
 	glPushMatrix();
@@ -151,6 +151,7 @@ PsychError SCREENFrameOval(void)
  	//All psychfunctions require this.
 	return(PsychError_none);
 }
+
 
 
 

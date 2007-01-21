@@ -114,7 +114,7 @@ PsychError PSYCHHIDGetReport(void)
 	dims[1]=reportBufferSize;
 	*outReport=mxCreateNumericArray(2,(void *)dims,mxUINT8_CLASS,mxREAL);
 	if(*outReport==NULL)PrintfExit("Couldn't allocate report array.");
-	reportBuffer=(void *)mxGetPr(*outReport);
+	reportBuffer=(void *)mxGetData(*outReport);
 	if(reportBuffer==NULL)PrintfExit("Couldn't allocate report buffer.");
 	reportBytes=reportBufferSize;
 	PsychHIDVerifyInit();
@@ -222,3 +222,4 @@ PsychError PSYCHHIDGetReport(void)
  function result
  kIOReturnSuccess on success, or an error return otherwise.
 */
+

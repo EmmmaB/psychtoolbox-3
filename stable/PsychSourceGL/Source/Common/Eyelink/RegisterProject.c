@@ -15,6 +15,7 @@
 		2003	  emp		created alpha version
 		11/21/05  cdb		Adapted from alpha version.
 		15/06/06  fwc		adapted and added functions
+		19/10/06  fwc		added raw data function
 
 	TARGET LOCATION:
 
@@ -44,8 +45,12 @@ PsychError PsychModuleInit(void)
 	// Register the module name
 	PsychErrorExitMsg(PsychRegister("Eyelink", NULL), "Failed to register Eyelink Module name!");
 
-	// Report the version
+	// Report the version: For some reason MODULEVersion.c seems to be
+	// missing from the source. Don't know why it works on OS-X, maybe
+	// it doesn't but we don't notice due to weak-linking?
+	#if PSYCH_SYSTEM == PSYCH_OSX
 	PsychErrorExit(PsychRegister("Version",  &MODULEVersion));
+	#endif
 
 	// Register sub-commands
 	PsychErrorExit(PsychRegister("ButtonStates",		&EyelinkButtonStates));
@@ -80,6 +85,14 @@ PsychError PsychModuleInit(void)
 	PsychErrorExit(PsychRegister("ReadTime",				&EyelinkReadTime));
 	PsychErrorExit(PsychRegister("RequestTime",				&EyelinkRequestTime));
 	PsychErrorExit(PsychRegister("GetTrackerVersion",		&EyelinkGetTrackerVersion));
+
+	//added as of 19/10/06
+	PsychErrorExit(PsychRegister("NewestFloatSampleRaw",	&EyelinkNewestFloatSampleRaw));
+
+	//added as of 30/10/06
+	PsychErrorExit(PsychRegister("GetNextDataType",	&EyelinkGetNextDataType));
+	PsychErrorExit(PsychRegister("GetNextData",	&EyelinkGetNextDataType));  // for compatibility reasons only
+	PsychErrorExit(PsychRegister("GetFloatData",	&EyelinkGetFloatData));
 	
 	//register synopsis and named subfunctions.
 	InitializeSynopsis();   //Scripting glue won't require this if the function takes no arguments.
@@ -89,4 +102,5 @@ PsychError PsychModuleInit(void)
 	
 	return(PsychError_none);
 }
+
 

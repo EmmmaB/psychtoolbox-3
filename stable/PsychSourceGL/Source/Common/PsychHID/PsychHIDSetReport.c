@@ -60,7 +60,7 @@ PsychError PSYCHHIDSetReport(void)
 	PsychCopyInIntegerArg(2,TRUE,&reportType);
 	PsychCopyInIntegerArg(3,TRUE,&reportID);
 	report=PsychGetInArgMxPtr(4); 
-	reportBuffer=(void *)mxGetPr(report);
+	reportBuffer=(void *)mxGetData(report);
 	assert(reportBuffer!=NULL);
 	switch(mxGetClassID(report)){
 		case mxCHAR_CLASS:    
@@ -122,3 +122,4 @@ PsychError PSYCHHIDSetReport(void)
 	}		
     return(PsychError_none);	
 }
+
