@@ -7,12 +7,13 @@
 %    AlphaRotateDemo         - A variant of AlphaImageDemoOSX, demonstrates rotated drawing.
 %    ArcDemo                 - Demonstrate the 'FrameArc', 'FillArc' functions.
 %    BubbleDemo              - Like GazeContingentDemoOSX, but with multiple apertures.
-%    CLUTAnimDemo            - Demonstrate lookup table animation.
+%    CalDemo                 - Demonstrate use of calibration structure and associated routines.
+%    ClutAnimDemo            - Demonstrate lookup table animation.
 %    DotDemo                 - Animate dots with Screen('DrawDots).
 %    DKLDemo                 - Demonstrate DKL color space.
 %    DrawFormattedTextDemo   - Demonstrate formatted text drawing via DrawFormattedText()
-%    DrawMirroredText        - Shows how to draw horizontally mirrored text.
-%    DrawSomeText            - Very simple example of using 'DrawText'.
+%    DrawMirroredTextDemo    - Shows how to draw horizontally mirrored text.
+%    DrawSomeTextDemo        - Very simple example of using 'DrawText'.
 %    DriftDemo               - Animation of grating using textures.
 %    DriftDemo2              - More efficient animation of gratings using one texture.
 %    DriftDemo3              - Even more efficient animation of gratings.

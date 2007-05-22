@@ -74,11 +74,15 @@ PsychError SCREENCloseAll(void)
 // etc....
 // This routine is normally called by SCREENCloseAll, but can be also called by the exit-handler,
 // and diverse error-handlers for cleanup.
-void ScreenCloseAllWindows()
+void ScreenCloseAllWindows(void)
 {
     PsychWindowRecordType	**windowRecordArray;
     int						i, numWindows, numScreens; 
 
+	// Reset the "userspaceGL" flag which tells PTB that userspace GL rendering was active
+	// due to Screen('BeginOpenGL') command.
+	PsychSetUserspaceGLFlag(FALSE);
+	
     // Shutdown Quicktime subsystems if active:
     PsychExitMovies();
     PsychExitVideoCapture();
@@ -88,13 +92,17 @@ void ScreenCloseAllWindows()
     // more stress on the PsychCloseWindow() path. If we have bugs there, chances are
     // higher they get exposed this way, which long-term is a good thing(TM).
     PsychCreateVolatileWindowRecordPointerList(&numWindows, &windowRecordArray);
-    for(i = numWindows - 1; i >= 0; i--) PsychCloseWindow(windowRecordArray[i]);
+    for(i = numWindows - 1; i >= 0; i--) {
+		if (PsychPrefStateGet_Verbosity()>5) { printf("PTB-DEBUG: In ScreenCloseAllWindows(): Destroying window %i\n", i); fflush(NULL); }
+		PsychCloseWindow(windowRecordArray[i]);
+	}
     PsychDestroyVolatileWindowRecordPointerList(windowRecordArray);
 
-    // Release all captured displays
+    // Release all captured displays, unhide the cursor on each of them:
     numScreens=PsychGetNumDisplays();
     for(i=0;i<numScreens;i++){
         if(PsychIsScreenCaptured(i)) PsychReleaseScreen(i);
+		PsychShowCursor(i);
     }
 
     return;

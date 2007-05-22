@@ -6,7 +6,7 @@
  
 	AUTHORS:
  E.Peters@ai.rug.nl				emp
- f.w.cornelissen@med.rug.nl		fwc
+ f.w.cornelissen@rug.nl		fwc
  
 	PLATFORMS:	Currently only OS X  
  

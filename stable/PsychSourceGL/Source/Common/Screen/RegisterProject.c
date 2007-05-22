@@ -205,7 +205,8 @@ PsychError PsychModuleInit(void)
 	PsychErrorExit(PsychRegister("SetOpenGLTextureFromMemPointer", &SCREENSetOpenGLTextureFromMemPointer));
 	PsychErrorExit(PsychRegister("ColorRange", &SCREENColorRange));
 	PsychErrorExit(PsychRegister("HookFunction", &SCREENHookFunction));
- 	
+ 	PsychErrorExit(PsychRegister("OpenProxy", &SCREENOpenProxy));
+	PsychErrorExit(PsychRegister("TransformTexture", &SCREENTransformTexture));
 	//Experiments
 
 
@@ -224,10 +225,14 @@ PsychError PsychModuleInit(void)
 	InitializePsychDisplayGlue();
 	InitWindowBank();
 	PsychMovieInit();
-        PsychVideoCaptureInit();
+	PsychVideoCaptureInit();
         
 	PrepareScreenPreferences();
-        
+    
+	// Reset the "userspaceGL" flag which tells PTB that userspace GL rendering was active
+	// due to Screen('BeginOpenGL') command.
+	PsychSetUserspaceGLFlag(FALSE);
+
 	return(PsychError_none);
 
 }
