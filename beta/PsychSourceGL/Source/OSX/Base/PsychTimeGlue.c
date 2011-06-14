@@ -427,14 +427,25 @@ int PsychWaitCondition(psych_condition* condition, psych_mutex* mutex)
 int PsychTimedWaitCondition(psych_condition* condition, psych_mutex* mutex, double maxwaittimesecs)
 {
 	struct timespec abstime;
-	// Split maxwaittimesecs in...
+	struct timeval gtod_time;
+	double tnow;
+
+	// Convert relative wait time to absolute system time. As pthread_cond_timedwait()
+	// uses gettimeofday() time as reference, we can't query or regular GetSecs clock,
+	// but need to use gettimeofday():
+	gettimeofday(&gtod_time, NULL);
+
+	// Convert gtod_time and maxwaittimesecs into timespec format, add it...
+	abstime.tv_sec  = (time_t) maxwaittimesecs + gtod_time.tv_sec;
+	abstime.tv_nsec = (long) (((double) maxwaittimesecs - (double) ((time_t) maxwaittimesecs)) * (double) (1e9));
+	abstime.tv_nsec+= (long) (gtod_time.tv_usec * 1000);
+
+	// ... (Re-)split into seconds and nanoseconds:
+	while (abstime.tv_nsec >= 1e9) {
+		abstime.tv_nsec-= 1e9;
+		abstime.tv_sec+= 1;
+	}
 	
-	// ... full integral seconds (floor() it)...
-	abstime.tv_sec  = (time_t) maxwaittimesecs;
-
-	// ... and fractional seconds, expressed as nanoseconds in (long) format:
-	abstime.tv_nsec = (long) (((double) maxwaittimesecs - (double) abstime.tv_sec) * (double) (1e9));
-
-	// Perform wait with timeout:
+	// Perform wait for signalled condition with a timeout at absolute system time abstime:
 	return(pthread_cond_timedwait(condition, mutex, &abstime));
 }

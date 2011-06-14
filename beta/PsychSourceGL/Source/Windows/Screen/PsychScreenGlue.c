@@ -336,6 +336,10 @@ void InitCGDisplayIDList(void)
 		}
 	}
   }
+
+  // Setup screenId -> display head mappings:
+  PsychInitScreenToHeadMappings(numDisplays);
+
   // Ready.
   return;
 }
@@ -867,15 +871,20 @@ void PsychReadNormalizedGammaTable(int screenNumber, int *numEntries, float **re
     *numEntries= 256;
 }
 
-void PsychLoadNormalizedGammaTable(int screenNumber, int numEntries, float *redTable, float *greenTable, float *blueTable)
+unsigned int PsychLoadNormalizedGammaTable(int screenNumber, int numEntries, float *redTable, float *greenTable, float *blueTable)
 {
     psych_bool 	ok; 
     CGDirectDisplayID	cgDisplayID;
 	 int     i;        
 	 // Windows hardware LUT has 3 tables for R,G,B, 256 slots each, concatenated to one table.
-    // Each entry is a 16-bit word with the n most significant bits used for an n-bit DAC.
+     // Each entry is a 16-bit word with the n most significant bits used for an n-bit DAC.
 	 psych_uint16	gammaTable[256 * 3]; 
 
+     // Special case empty 0-slot table provided? That means to load an identity
+     // gamma table and setup the GPU for identity pass-through from framebuffer to
+     // encoders. This is unsupported on Windows, so return the 0xffffffff "unsupported" code.
+     if (numEntries == 0) return(0xffffffff);
+     
 	 // Table must have 256 slots!
 	 if (numEntries!=256) PsychErrorExitMsg(PsychError_user, "Loadable hardware gamma tables must have 256 slots!");    
 
@@ -891,6 +900,9 @@ void PsychLoadNormalizedGammaTable(int screenNumber, int numEntries, float *redT
 	 ok=FALSE;
     for (i=0; i<10 && !ok; i++) ok=SetDeviceGammaRamp(cgDisplayID, &gammaTable);
 	 if (!ok) PsychErrorExitMsg(PsychError_user, "Failed to upload the hardware gamma table into graphics adapter! Read the help for explanation...");
+
+    // Return "success":
+     return(1);
 }
 
 // Beamposition queries on Windows are implemented via the DirectDraw-7 interface. It provides
@@ -919,30 +931,40 @@ void PsychLoadNormalizedGammaTable(int screenNumber, int numEntries, float *redT
 int PsychGetDisplayBeamPosition(CGDirectDisplayID cgDisplayId, int screenNumber)
 {
 	HRESULT rc;
-	psych_uint32 beampos = 0;
+	int vblbias, vbltotal;
+	psych_uint32 ubeampos = 0;
+	int	beampos = -1;
 	
-	// EXPERIMENTAL: For now this only queries the primary display device and
-	// probably only works properly on single-display setups and some multi-setups.
+	// Apply remapping of screenId's to heads, if any: Usually identity mapping.
+	screenNumber = PsychScreenToHead(screenNumber);
+	
 	if(displayDeviceDDrawObject[screenNumber]) {
 		// We have a Direct draw object: Try to use GetScanLine():
 		if (enableVBLBeamposWorkaround) {
 			// Beamposition queries don't work within vertical blank interval. We need to
 			// spin-wait in a busy waiting loop as long as the query status reports
 			// DDERR_VERTICALBLANKINPROGRESS aka "display in retrace state":
-			while((rc=IDirectDraw_GetScanLine(displayDeviceDDrawObject[screenNumber], (LPDWORD) &beampos)) == DDERR_VERTICALBLANKINPROGRESS);
+			while((rc=IDirectDraw_GetScanLine(displayDeviceDDrawObject[screenNumber], (LPDWORD) &ubeampos)) == DDERR_VERTICALBLANKINPROGRESS);
 		}
 		else {
 			// No known problems with query in VBL. Do a one-time query:
-			rc=IDirectDraw_GetScanLine(displayDeviceDDrawObject[screenNumber], (LPDWORD) &beampos);
+			rc=IDirectDraw_GetScanLine(displayDeviceDDrawObject[screenNumber], (LPDWORD) &ubeampos);
 		}
 		
-		// Mask returned beampos with 0xffff: This will not allow any
+		// Mask returned ubeampos with 0xffff: This will not allow any
 		// beamposition greater than 65535 scanlines to be returned.
 		// A reasonable limit for the foreseeable future:
-		beampos &= 0xffff;
+		ubeampos &= 0xffff;
+		
+		beampos = (int) ubeampos;
+		
+		// Apply corrective offsets if any (i.e., if non-zero):
+		PsychGetBeamposCorrection(screenNumber, &vblbias, &vbltotal);
+		beampos = beampos - vblbias;
+		if (beampos < 0) beampos = vbltotal + beampos;
 		
 		// Valid result? If so, return it. Otherwise fall-through to error return...
-		if (rc==DD_OK || rc==DDERR_VERTICALBLANKINPROGRESS) return((int) beampos);
+		if (rc==DD_OK || rc==DDERR_VERTICALBLANKINPROGRESS) return(beampos);
 	}
 	
 	// Direct Draw unavailable or function unsupported, or hardware
@@ -971,7 +993,7 @@ void PsychTestDDrawBeampositionQueries(int screenNumber)
 	int verbosity = PsychPrefStateGet_Verbosity();
 	
 	// Check how beamposition query behaves inside the vertical blanking interval:
-	if((displayDeviceDDrawObject[screenNumber]) && (PsychPrefStateGet_VBLTimestampingMode()>=0)) {
+	if((displayDeviceDDrawObject[PsychScreenToHead(screenNumber)]) && (PsychPrefStateGet_VBLTimestampingMode()>=0)) {
 		// We have a Direct draw object and beampos queries are enabled: Try to test GetScanLine():
 		
 		// First find reference height values for display, aka start of vertical blank.
@@ -1016,7 +1038,7 @@ void PsychTestDDrawBeampositionQueries(int screenNumber)
 			
 			// Query beam position:
 			beampos = 0xdeadbeef;
-			rc=IDirectDraw_GetScanLine(displayDeviceDDrawObject[screenNumber], (LPDWORD) &beampos);
+			rc=IDirectDraw_GetScanLine(displayDeviceDDrawObject[PsychScreenToHead(screenNumber)], (LPDWORD) &beampos);
 			if (rc==DD_OK || rc==DDERR_VERTICALBLANKINPROGRESS) {
 				// Some sample returned...
 				totalcount++;

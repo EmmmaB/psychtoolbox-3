@@ -1,5 +1,5 @@
 function DelayedSoundFeedbackDemo(reqlatency, duplex, freq, minLatency)
-% DelayedSoundFeedbackDemo([reqlatency=15 ms][, duplex=0][, freq = 48000][, minLatency= 10 ms])
+% DelayedSoundFeedbackDemo([reqlatency=150 ms][, duplex=0][, freq = 48000][, minLatency= 10 ms])
 %
 % THIS IS EARLY ALPHA CODE! IT MAY OR MAY NOT WORK RELIABLY ON YOUR SETUP!
 % TEST IT WITH MEASUREMENT EQUIPMENT IF YOU DEPEND ON ACCURATE FEEDBACK
@@ -15,7 +15,7 @@ function DelayedSoundFeedbackDemo(reqlatency, duplex, freq, minLatency)
 %
 % 'reqlatency' Wanted feedback latency between sound input and output in
 % milliseconds. A value of zero will ask for the lowest possible latency on
-% the given setup. Defaults to 15 msecs. Please notice that the minimum
+% the given setup. Defaults to 150 msecs. Please notice that the minimum
 % achievable latency will be constrained by the capabilities of your
 % operating system, sound card driver, computer hardware and sound
 % hardware. Only very high quality systems will be able to go below 5 msecs
@@ -87,9 +87,8 @@ function DelayedSoundFeedbackDemo(reqlatency, duplex, freq, minLatency)
 % 07/20/2007 Written (MK)
 % 07/19/2009 Derived and largely rewritten from BasicSoundFeedbackDemo (MK)
 % 08/02/2009 Add support for 'DirectInputMonitoring' for reqLatency=0 (MK)
-
-% oldMode = PsychPortAudio('SetOpMode', paoutput, 4)
-% oldMode2 = PsychPortAudio('SetOpMode', paoutput)
+% 04/03/2011 Disable dynamic adaptation of captureQuantum. It causes
+%            artifacts at some feedback delay settings. (MK)
 
 % Level of debug output:
 verbose = 1;
@@ -119,7 +118,7 @@ if nargin < 1
 end
 
 if isempty(reqlatency)
-    reqlatency = 15;
+    reqlatency = 150;
 end
 
 if nargin < 2
@@ -428,12 +427,20 @@ while ~KbCheck
     % iterations within 'GetAudioData', thereby reducing the load on the
     % operating system and cpu. This is mostly needed on MS-Windows with
     % its highly deficient scheduling and timing systems:
-    maxtimeUntilRefill = (nextSampleETASecs - s1.CurrentStreamTime) / 2;
-    if maxtimeUntilRefill > (3 * updateQuantum)
-        captureQuantum = (floor(maxtimeUntilRefill / updateQuantum) - 1) * updateQuantum;
-    else
-        captureQuantum = updateQuantum;
-    end
+
+    % OK, this doesn't work glitch free for some reason. Leave it disabled.
+    % Produces higher load, but at least works without artifacts.
+    %
+    % TODO: FIXME properly!
+    %
+    %    maxtimeUntilRefill = (nextSampleETASecs - s1.CurrentStreamTime) / 10;
+    %     if maxtimeUntilRefill > (3 * updateQuantum)
+    %         captureQuantum = (floor(maxtimeUntilRefill / updateQuantum) - 1) * updateQuantum;
+    %     else
+    %        captureQuantum = updateQuantum;
+    %     end
+
+    captureQuantum = updateQuantum;
     
     if captureQuantum ~= oldcaptureQuantum
         oldcaptureQuantum = captureQuantum;

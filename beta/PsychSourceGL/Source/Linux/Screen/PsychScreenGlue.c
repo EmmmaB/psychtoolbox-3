@@ -35,7 +35,7 @@
 #include "Screen.h"
 
 
-/* These are needed for our ATI specific beamposition query implementation: */
+/* These are needed for our GPU specific beamposition query implementation: */
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -45,6 +45,10 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <sys/mman.h>
+
+// To us libpciaccess for GPU device detection and mmaping():
+#include "pciaccess.h"
+#define PCI_CLASS_DISPLAY	0x03
 
 // We build with VidModeExtension support unless forcefully disabled at compile time via a -DNO_VIDMODEEXTS
 #ifndef NO_VIDMODEEXTS
@@ -59,252 +63,351 @@
 #define XF86VidModeNumberErrors 0
 #endif
 
-
-// file local variables
-/* Following structures are needed by our ATI beamposition query implementation: */
-/* Location and format of the relevant hardware registers of the R500/R600 chips
+/* Following structures are needed by our ATI/AMD/NVIDIA beamposition query implementation: */
+/* Location and format of the relevant hardware registers of the ATI R500/R600 chips
  * was taken from the official register spec for that chips which was released to
  * the public by AMD/ATI end of 2007 and is available for download at XOrg.
- * TODO: Add download link to ATI spec documents!
  *
- * I'm certain this should work on any R500/600 chip, but as i don't have any
- * specs for earlier Radeons, i don't know what happens on such GPU's. If it
- * works, it'll work by accident/luck, but not because we designed for it ;-).
- */
- 
-/* The method - and small bits of code - for accessing the ATI Radeons registers
- * directly, was taken/borrowed/derived from the useful "Radeontool" utility from
- * Frederick Dean. Below is the copyright notice and credits of Radeontool:
+ * http://www.x.org/docs/AMD/
  *
- * Radeontool   v1.4
- * by Frederick Dean <software@fdd.com>
- * Copyright 2002-2004 Frederick Dean
- * Use hereby granted under the zlib license.
- *
- * Warning: I do not have the Radeon documents, so this was engineered from 
- * the radeon_reg.h header file.  
- *
- * USE RADEONTOOL AT YOUR OWN RISK
- *
- * Thanks to Deepak Chawla, Erno Kuusela, Rolf Offermanns, and Soos Peter
- * for patches.
+ * Register spec's for DCE-4 hardware are from Linux kms driver and Alex Deucher.
+ * This should work on any AVIVO or DCE4/5 display hardware chip, i.e., R300 and
+ * later. It won't work on ancient pre-AVIVO hardware.
  */
 
 #include "PsychGraphicsCardRegisterSpecs.h"
+#include <endian.h>
 
 // gfx_cntl_mem is mapped to the actual device's memory mapped control area.
 // Not the address but what it points to is volatile.
+struct pci_device *gpu = NULL;
 unsigned char * volatile gfx_cntl_mem = NULL;
-unsigned int  gfx_length = 0;
+unsigned long gfx_length = 0;
+unsigned long gfx_lowlimit = 0;
+unsigned int  fDeviceType = 0;
+unsigned int  fCardType = 0;
+unsigned int  fPCIDeviceId = 0;
+unsigned int  fNumDisplayHeads = 0;
 
 // Count of kernel drivers:
 static int    numKernelDrivers = 0;
 
+// Offset of crtc blocks of evergreen gpu's for each of the six possible crtc's:
+unsigned int crtcoff[(DCE4_MAXHEADID + 1)] = { EVERGREEN_CRTC0_REGISTER_OFFSET, EVERGREEN_CRTC1_REGISTER_OFFSET, EVERGREEN_CRTC2_REGISTER_OFFSET, EVERGREEN_CRTC3_REGISTER_OFFSET, EVERGREEN_CRTC4_REGISTER_OFFSET, EVERGREEN_CRTC5_REGISTER_OFFSET };
+// unsigned int crtcoff[(DCE4_MAXHEADID + 1)] = { 0x6df0, 0x79f0, 0x105f0, 0x111f0, 0x11df0, 0x129f0 };
+
+/* Is a given ATI/AMD GPU a DCE5 type ASIC, i.e., with the new display engine? */
+static psych_bool isDCE5(int screenId)
+{
+	psych_bool isDCE5 = false;
+
+	// Everything after BARTS is DCE5 -- This is the "Northern Islands" GPU family.
+	// Barts, Turks, Caicos, Cayman, Antilles in 0x67xx range:
+	if ((fPCIDeviceId & 0xFF00) == 0x6700) isDCE5 = true;
+
+	return(isDCE5);
+}
+
+/* Is a given ATI/AMD GPU a DCE4 type ASIC, i.e., with the new display engine? */
+static psych_bool isDCE4(int screenId)
+{
+	psych_bool isDCE4 = false;
+
+	// Everything after CEDAR is DCE4. The Linux radeon kms driver defines
+	// in radeon_family.h which chips are CEDAR or later, and the mapping to
+	// these chip codes is done by matching against pci device id's in a
+	// mapping table inside linux/include/drm/drm_pciids.h
+	// Maintaining a copy of that table is impractical for PTB, so we simply
+	// check which range of PCI device id's is covered by the DCE-4 chips and
+	// code up matching rules here. This should do for now...
+	
+	// Caiman, Cedar, Redwood, Juniper, Cypress, Hemlock in 0x6xxx range:
+	if ((fPCIDeviceId & 0xF000) == 0x6000) isDCE4 = true;
+	
+	// Palm in 0x98xx range:
+	if ((fPCIDeviceId & 0xFF00) == 0x9800) isDCE4 = true;
+
+	return(isDCE4);
+}
+
 // Helper routine: Read a single 32 bit unsigned int hardware register at
 // offset 'offset' and return its value:
-static unsigned int radeon_get(unsigned int offset)
+static unsigned int ReadRegister(unsigned long offset)
 {
-    unsigned int value;
-    value = *(unsigned int * volatile)(gfx_cntl_mem + offset);
+	unsigned int value;
+
+	// Safety check: Don't allow reads past devices MMIO range:
+	// We don't return error codes and don't log the problem,
+	// because we could be called from primary Interrupt path, so IOLog() is not
+	// an option!
+	if (gfx_cntl_mem == NULL || offset > gfx_length-4 || offset < gfx_lowlimit) return(0);
+	
+	// Read and return value:
+	value = *(unsigned int * volatile)(gfx_cntl_mem + offset);
+
 	// Enforce a full memory barrier: This is a gcc intrinsic:
 	__sync_synchronize();  
-    return(value);
+
+	// Radeon: Don't know endianity behaviour: Play save, stick to LE assumption for now:
+	if (fDeviceType == kPsychRadeon) return(le32toh(value));
+
+	// Read the register in native byte order: At least NVidia GPU's adapt their
+	// endianity to match the host systems endianity, so no need for conversion:
+	if (fDeviceType == kPsychGeForce)  return(value);
+	if (fDeviceType == kPsychIntelIGP) return(value);
+
+	// No-Op return:
+	printf("PTB-ERROR: In GPU ReadRegister(): UNKNOWN fDeviceType of GPU! NO OPERATION!\n");
+	return(0);
 }
 
 // Helper routine: Write a single 32 bit unsigned int hardware register at
 // offset 'offset':
-static void radeon_set(unsigned int offset, unsigned int value)
+static void WriteRegister(unsigned long offset, unsigned int value)
 {
-    *(unsigned int* volatile)(gfx_cntl_mem + offset) = value;  
+	// Safety check: Don't allow reads past devices MMIO range:
+	// We don't return error codes and don't log the problem,
+	// because we could be called from primary Interrupt path, so IOLog() is not
+	// an option!
+	if (gfx_cntl_mem == NULL || offset > gfx_length-4 || offset < gfx_lowlimit) return;
+
+	// Write the register in native byte order: At least NVidia GPU's adapt their
+	// endianity to match the host systems endianity, so no need for conversion:
+	if (fDeviceType == kPsychGeForce)  value = value;
+	if (fDeviceType == kPsychIntelIGP) value = value;
+
+	// Radeon: Don't know endianity behaviour: Play save, stick to LE assumption for now:
+	if (fDeviceType == kPsychRadeon) value = htole32(value);
+
+	*(unsigned int* volatile)(gfx_cntl_mem + offset) = value;
+	
 	// Enforce a full memory barrier: This is a gcc intrinsic:
 	__sync_synchronize();  
 }
 
-// Helper routine: mmap() the MMIO memory mapped I/O PCI register space of
-// graphics card hardware registers into our address space for easy access
-// by the radeon_get() routine. 
-static unsigned char * map_device_memory(unsigned int base, unsigned int length) 
-{
-    int mem_fd;
-    unsigned char *device_mem = NULL;
-    
-    // Open device file /dev/mem -- Raw read/write access to system memory space -- Only root can do this:
-    if ((mem_fd = open("/dev/mem", O_RDWR) ) < 0) {
-        printf("PTB-WARNING: Beamposition queries unavailable because can't open /dev/mem\nYou must run Matlab/Octave with root privileges for this to work.\n\n");
-	return(NULL);
-    }
-    
-    // Try to mmap() the MMIO PCI register space to the block of memory and return a handle/its base address.
-    // We only ask for a read-only shared mapping and don't request write-access. This as a child protection
-    // as we only need to read registers -- this protects against accidental writes to sensitive device control
-    // registers:
-    device_mem = (unsigned char *) mmap(NULL, length, PROT_READ | PROT_WRITE, MAP_SHARED, mem_fd, base);
-    
-    // Close file handle to /dev/mem. Not needed anymore, our mmap() will keep the mapping until unmapped...
-    close(mem_fd);
-    
-    // Worked?
-    if (MAP_FAILED == device_mem) {
-	printf("PTB-WARNING: Beamposition queries unavailable because could not mmap() device memory: mmap error [%s]\n", strerror(errno));
-    	return(NULL);
-    }
-    
-    // Return memory pointer to mmap()'ed registers...
-    gfx_length = length;
-    
-    return(device_mem);
-}
-
-// Helper routine: Unmap gfx card control memory and release associated ressources:
 void PsychScreenUnmapDeviceMemory(void)
 {
 	// Any mapped?
 	if (gfx_cntl_mem) {
 		// Unmap:
-		munmap(gfx_cntl_mem, gfx_length);
+		pci_device_unmap_range(gpu, (void*) gfx_cntl_mem, gfx_length);
 		gfx_cntl_mem = NULL;
 		gfx_length = 0;
+		gpu = NULL;
 	}
+
+	// Shutdown PCI access library, release all resources:
+	pci_system_cleanup();
+
 	return;
 }
 
-// Helper routine: Check if a supported ATI Radeon card (X1000, HD2000 or HD3000 .... series)
-// is installed, detect base address of its register space, mmap() it into our address space.
-// This is done by parsing the output of the lspci command...
+// Helper routine: Check if a supported GPU is installed, and mmap() its MMIO register
+// control block into our address space for direct register access:
 psych_bool PsychScreenMapRadeonCntlMemory(void)
 {
-	int pipefd[2];
-	int forkrc;
-	FILE *fp;
-	char line[1000];
-	int base;
+	struct pci_device_iterator *iter;
+	struct pci_device *dev;
+	struct pci_mem_region *region;
+	int ret;
+	int screenId = 0;
 
-	if(pipe(pipefd)) {
-		printf("PTB-DEBUG:[In ATI Radeon detection code]: pipe() failure\n");
+	// Safe-guard:
+	if (gfx_cntl_mem || gpu) {
+		if (PsychPrefStateGet_Verbosity() > 1) printf("PTB-WARNING: Redundant call to PsychScreenMapRadeonCntlMemory()! Ignored for now. This should not happen!\n");
+		return(TRUE);
+	}
+
+	// Start with default setting: No low-level access possible.
+	gfx_cntl_mem = NULL;
+	gfx_length = 0;
+	gpu = NULL;
+
+	// Initialize libpciaccess:
+	ret = pci_system_init();
+	if (ret) {
+		if (PsychPrefStateGet_Verbosity() > 1) printf("PTB-WARNING: Could not establish low-level access to GPU for screenId %i - Could not initialize PCI system.\n", screenId);
 		return(FALSE);
 	}
-	forkrc = fork();
-	if(forkrc == -1) {
-		printf("PTB-DEBUG:[In ATI Radeon detection code] fork() failure\n");
-		return(FALSE);
-	} else if(forkrc == 0) { /* if child */
-		close(pipefd[0]);
-		dup2(pipefd[1],1);  /* stdout */
-		setenv("PATH","/sbin:/usr/sbin:/bin:/usr/bin",1);
-		execlp("lspci","lspci","-v",NULL);
-		// This point is normally not reached, unless an error occured:
-		printf("PTB-DEBUG:[In ATI Radeon detection code] exec lspci failure\n");
-		return(FALSE);
+
+	// Enumerate them:
+	iter = pci_id_match_iterator_create(NULL);
+	while ((dev = pci_device_next(iter)) != NULL) {
+		if (PsychPrefStateGet_Verbosity() > 4) {
+			printf("PTB-DEBUG: Checking PCI device [%s %s] with class x%08x ...\n", pci_device_get_vendor_name(dev), pci_device_get_device_name(dev), dev->device_class);
+		}
+
+		// "Upgrade" pre PCI 2.0 class device to PCI 2.0 class equivalent
+		// to simplify matching:
+		if (dev->device_class == 0x00000101) dev->device_class = 0x00030000;
+		
+		// GPU aka display device class?
+		if ((dev->device_class & 0x00ff0000) == (PCI_CLASS_DISPLAY << 16)) {
+			// dev is our current candidate gpu. Matching vendor?
+			if (dev->vendor_id == PCI_VENDOR_ID_NVIDIA || dev->vendor_id == PCI_VENDOR_ID_ATI || dev->vendor_id == PCI_VENDOR_ID_AMD || dev->vendor_id == PCI_VENDOR_ID_INTEL) {
+				// Yes. This is our baby from NVidia or ATI/AMD or Intel:
+				gpu = dev;
+				break;
+			}
+		}
 	}
-	
-	// Parent code: Listen at our end of the pipeline for some news from the 'lspci' command:
-	close(pipefd[1]);
-	fp = fdopen(pipefd[0],"r");
-	if(fp == NULL) {
-		printf("PTB-DEBUG:[In ATI Radeon detection code] fdopen error\n");
-		wait(NULL);
-		return(FALSE);
-	}
-#if 0
-	This is an example output of "lspci -v" ...
 
-	00:1f.6 Modem: Intel Corp. 82801CA/CAM AC 97 Modem (rev 01) (prog-if 00 [Generic])
-	Subsystem: PCTel Inc: Unknown device 4c21
-	Flags: bus master, medium devsel, latency 0, IRQ 11
-	I/O ports at d400 [size=256]
-	I/O ports at dc00 [size=128]
+	// Enumeration finished - Release iterator:
+	pci_iterator_destroy(iter);
 
-	01:00.0 VGA compatible controller: ATI Technologies Inc Radeon Mobility M6 LY (prog-if 00 [VGA])
-	Subsystem: Dell Computer Corporation: Unknown device 00e3
-	Flags: bus master, VGA palette snoop, stepping, 66Mhz, medium devsel, latency 32, IRQ 11
-	Memory at e0000000 (32-bit, prefetchable) [size=128M]
-	I/O ports at c000 [size=256]
-	Memory at fcff0000 (32-bit, non-prefetchable) [size=64K]
-	Expansion ROM at <unassigned> [disabled] [size=128K]
-	Capabilities: <available only to root>
+	// Found matching GPU?
+	if (gpu) {
+		// Yes!
+		if (PsychPrefStateGet_Verbosity() > 2) {
+			printf("PTB-INFO: %s - %s GPU found. Trying to establish low-level access...\n", pci_device_get_vendor_name(gpu), pci_device_get_device_name(gpu));
+			fflush(NULL);
+		}
+		
+		// Pull in remaining info about gpu:
+		ret = pci_device_probe(gpu);
+		if (ret) {
+			if (PsychPrefStateGet_Verbosity() > 1) {
+				printf("PTB-INFO: Could not probe properties of GPU for screenId %i [%s]\n", screenId, strerror(ret));
+				printf("PTB-INFO: Beamposition timestamping and other special features disabled.\n");
+				fflush(NULL);
+			}
 
-	02:00.0 Ethernet controller: 3Com Corporation 3c905C-TX/TX-M [Tornado] (rev 78)
-	Subsystem: Dell Computer Corporation: Unknown device 00e3
-	Flags: bus master, medium devsel, latency 32, IRQ 11
-	I/O ports at ec80 [size=128]
-	Memory at f8fffc00 (32-bit, non-prefetchable) [size=128]
-	Expansion ROM at f9000000 [disabled] [size=128K]
-	Capabilities: <available only to root>
+			gpu = NULL;
 
-	We need to look through it to find the smaller region base address fcff0000.
+			// Cleanup:
+			pci_system_cleanup();
+			
+			return(FALSE);
+		}
 
-#endif
+		// Store PCI device id:
+		fPCIDeviceId = gpu->device_id;
+		
+		// Find out which BAR to use for mapping MMIO registers. Depends on GPU vendor:
+		if (gpu->vendor_id == PCI_VENDOR_ID_NVIDIA) {
+			// BAR 0 is MMIO:
+			region = &gpu->regions[0];
+			fDeviceType = kPsychGeForce;
+            fNumDisplayHeads = 2;
+		}
 
-	// Iterate line-by-line over lspci output until the Radeon descriptor block is found:
-	while(1) {
-		/* for every line up to the "Radeon" string */
-		if(fgets(line,sizeof(line),fp) == NULL) {  /* if end of file */
-			printf("PTB-INFO: No ATI Radeon hardware found in lspci output. Beamposition queries unsupported.\n");
-			fclose(fp);
-			wait(NULL);
+		if (gpu->vendor_id == PCI_VENDOR_ID_ATI || gpu->vendor_id == PCI_VENDOR_ID_AMD) {
+			// BAR 2 is MMIO:
+			region = &gpu->regions[2];
+			fDeviceType = kPsychRadeon;
+            fNumDisplayHeads = 2;
+		}
+		
+		if (gpu->vendor_id == PCI_VENDOR_ID_INTEL) {
+			// On non GEN-2 hardware, BAR 0 is MMIO:
+			region = &gpu->regions[0];
+			fCardType = 0;
+
+			// On GEN-2 hardware, BAR 1 is MMIO: Detect known IGP's of GEN-2.
+			if ((fPCIDeviceId == 0x3577) || (fPCIDeviceId == 0x2562) || (fPCIDeviceId == 0x3582) || (fPCIDeviceId == 0x358e) || (fPCIDeviceId == 0x2572)) {
+				region = &gpu->regions[1];
+				fCardType = 2;
+			}
+
+			fDeviceType = kPsychIntelIGP;
+            fNumDisplayHeads = 2;
+		}
+
+		// Try to MMAP MMIO registers with write access, assign their base address to gfx_cntl_mem on success:
+		if (PsychPrefStateGet_Verbosity() > 4) {
+			printf("PTB-DEBUG: Mapping GPU BAR address %p ...\n", region->base_addr);
+			printf("PTB-DEBUG: Mapping %p bytes...\n", region->size);
+			fflush(NULL);
+		}
+
+		ret = pci_device_map_range(gpu, region->base_addr, region->size, PCI_DEV_MAP_FLAG_WRITABLE, (void**) &gfx_cntl_mem);		
+		if (ret || (NULL == gfx_cntl_mem)) {
+			if (PsychPrefStateGet_Verbosity() > 1) {
+				printf("PTB-INFO: Failed to map GPU low-level control registers for screenId %i [%s].\n", screenId, strerror(ret));
+				printf("PTB-INFO: Beamposition timestamping and other special functions disabled.\n");
+				printf("PTB-INFO: You must run Matlab/Octave with root privileges for this to work.\n");
+				printf("PTB-INFO: However, if you are using the free graphics drivers, there isn't any need for this.\n");
+				fflush(NULL);
+			}
+			
+			// Failed:
+			gpu = NULL;
+
+			// Cleanup:
+			pci_system_cleanup();
+
 			return(FALSE);
 		}
 		
-		if((strstr(line,"VGA")) && (strstr(line,"Fire") || strstr(line,"Radeon") || strstr(line,"ATI Tech"))) {  /* if line contains a "radeon" string */
-			break; // Found it!
-		}
-	};
-	
-	// Iterate over Radeon descriptor block until the line with the control register mapping is found:
-	while(1) { /* for every line up till memory statement */
-		if(fgets(line,sizeof(line),fp) == NULL || line[0] != '\t') {  /* if end of file */
-			printf("PTB-INFO: ATI Radeon control memory not found in lspci output. Beamposition queries unsupported.\n");
-			fclose(fp);
-			wait(NULL);
-			return(FALSE);
-		}
-		
-		if(0) printf("%s",line);
-		
-		if(strstr(line,"emory") && strstr(line,"K")) {  /* if line contains a "Memory" and "K" string */
-				break; // Found it! This line contains the base address...
-		}
-	};
-	
-	// Close lspci output and comm-pipe:
-	fclose(fp);
-	wait(NULL);
+		// Success! Identify GPU:
+		gfx_length = region->size;
 
-	// Extract base address from config-line:
-	if(sscanf(line,"%*s%*s%x",&base) == 0) { /* third token as hex number */
-		printf("PTB-INFO: ATI Radeon control memory not found in lspci output [parse error of lspci output]. Beamposition queries unsupported.\n");
-		return(FALSE);
+		// Lowest allowable MMIO register offset for given GPU:
+		gfx_lowlimit = 0;
+		
+		if (fDeviceType == kPsychGeForce) {
+			fCardType = PsychGetNVidiaGPUType(NULL);
+			if (PsychPrefStateGet_Verbosity() > 2) {
+				printf("PTB-INFO: Connected to NVidia %s GPU of NV-%02x family. Beamposition timestamping enabled.\n", pci_device_get_device_name(gpu), fCardType);
+				fflush(NULL);
+			}
+		}
+		
+		if (fDeviceType == kPsychRadeon) {
+            // On Radeons we distinguish between Avivo (10) or DCE-4 style (40) or DCE-5 (50) for now.
+			fCardType = isDCE5(screenId) ? 50 : (isDCE4(screenId) ? 40 : 10);
+            
+			// On DCE-4 and later GPU's (Evergreen) we limit the minimum MMIO
+			// offset to the base address of the 1st CRTC register block for now:
+			if (isDCE4(screenId) || isDCE5(screenId)) {
+                gfx_lowlimit = 0x6df0;
+                
+                // Also, DCE-4 supports up to six display heads:
+                fNumDisplayHeads = 6;
+            }
+			
+			if (PsychPrefStateGet_Verbosity() > 2) {
+				printf("PTB-INFO: Connected to %s %s GPU with %s display engine. Beamposition timestamping enabled.\n", pci_device_get_vendor_name(gpu), pci_device_get_device_name(gpu), (fCardType >= 40) ? ((fCardType >= 50) ? "DCE-5" : "DCE-4") : "AVIVO");
+				fflush(NULL);
+			}
+		}
+		
+		if (fDeviceType == kPsychIntelIGP) {
+			if (PsychPrefStateGet_Verbosity() > 2) {
+				printf("PTB-INFO: Connected to Intel %s GPU%s. Beamposition timestamping enabled.\n", pci_device_get_device_name(gpu), (fCardType == 2) ? " of GEN-2 type" : "");
+				fflush(NULL);
+			}
+		}
+
+        // Perform auto-detection of screen to head mappings:
+        PsychAutoDetectScreenToHeadMappings(fNumDisplayHeads);
+
+		// Ready to rock!
+	} else {
+		// No candidate.
+		if (PsychPrefStateGet_Verbosity() > 2) printf("PTB-INFO: No suitable low-level controllable GPU found for screenId %i. Beamposition timestamping and other special functions disabled.\n", screenId);
+		fflush(NULL);
+		
+		// Cleanup:
+		pci_system_cleanup();
 	}
-	
-	// Got it!
-	printf("PTB-INFO: ATI-Radeon found. Base control address is %x.\n",base);
-	
-	// mmap() the PCI register space into our memory: Currently we map 0x8000 bytes, although the actual
-	// configuration space would be 0xffff bytes, but we neither need, nor know what the upper regions of
-	// this space do, so no need to map'em: gfx_cntl_mem will contain the base of the register block,
-	// all register addresses in the official Radeon specs are offsets to that base address. This will
-	// return NULL if the mapping fails, e.g., due to insufficient permissions etc...
-	gfx_cntl_mem = map_device_memory(base, 0x8000);
 	
 	// Return final success or failure status:
 	return((gfx_cntl_mem) ? TRUE : FALSE);
 }
 
-
 // Maybe use NULLs in the settings arrays to mark entries invalid instead of using psych_bool flags in a different array.   
-static psych_bool			displayLockSettingsFlags[kPsychMaxPossibleDisplays];
+static psych_bool		displayLockSettingsFlags[kPsychMaxPossibleDisplays];
 static CFDictionaryRef	        displayOriginalCGSettings[kPsychMaxPossibleDisplays];        	//these track the original video state before the Psychtoolbox changed it.  
-static psych_bool			displayOriginalCGSettingsValid[kPsychMaxPossibleDisplays];
+static psych_bool		displayOriginalCGSettingsValid[kPsychMaxPossibleDisplays];
 static CFDictionaryRef	        displayOverlayedCGSettings[kPsychMaxPossibleDisplays];        	//these track settings overlayed with 'Resolutions'.  
-static psych_bool			displayOverlayedCGSettingsValid[kPsychMaxPossibleDisplays];
+static psych_bool		displayOverlayedCGSettingsValid[kPsychMaxPossibleDisplays];
 static CGDisplayCount 		numDisplays;
 
 // displayCGIDs stores the X11 Display* handles to the display connections of each PTB logical screen:
 static CGDirectDisplayID 	displayCGIDs[kPsychMaxPossibleDisplays];
 // displayX11Screens stores the mapping of PTB screenNumber's to corresponding X11 screen numbers:
 static int                      displayX11Screens[kPsychMaxPossibleDisplays];
-// Maps screenid's to Graphics hardware pipelines: Used to choose pipeline for beampos-queries...
-static unsigned char		displayScreensToPipes[kPsychMaxPossibleDisplays];
 static psych_bool               displayCursorHidden[kPsychMaxPossibleDisplays];
 
 // X11 has a different - and much more powerful and flexible - concept of displays than OS-X or Windows:
@@ -374,8 +477,7 @@ void InitializePsychDisplayGlue(void)
         displayLockSettingsFlags[i]=FALSE;
         displayOriginalCGSettingsValid[i]=FALSE;
         displayOverlayedCGSettingsValid[i]=FALSE;
-	displayCursorHidden[i]=FALSE;
-	displayScreensToPipes[i]=i;
+		displayCursorHidden[i]=FALSE;
     }
     
 	if (firstTime) {
@@ -407,7 +509,6 @@ void InitCGDisplayIDList(void)
 {  
   int i, j, k, count, scrnid;
   char* ptbdisplays = NULL;
-  char* ptbpipelines = NULL;
   char displayname[1000];
   CGDirectDisplayID x11_dpy = NULL;
  
@@ -491,16 +592,8 @@ void InitCGDisplayIDList(void)
   if (numDisplays>1) printf("PTB-Info: A total of %i physical X-Windows display screens is available for use.\n", numDisplays);
   fflush(NULL);
 
-  // Did user provide an override for the screenid --> pipeline mapping?
-  ptbpipelines = getenv("PSYCHTOOLBOX_PIPEMAPPINGS");
-  if (ptbpipelines) {
-	// Yep. Format is: One character (a number between "0" and "9") for each screenid,
-	// e.g., "021" would map screenid 0 to pipe 0, screenid 1 to pipe 2 and screenid 2 to pipe 1.
-	// The default is "012...", ie screen 0 = pipe 0, 1 = pipe 1, 2 =pipe 2, n = pipe n
-	for (j=0; j<strlen(ptbpipelines) && j<numDisplays; j++) {
-	   displayScreensToPipes[j] = ((ptbpipelines[j] - 0x30)>=0 && (ptbpipelines[j] - 0x30)<kPsychMaxPossibleDisplays) ? (ptbpipelines[j] - 0x30) : 0;
-	}
-  }
+  // Initialize screenId -> GPU headId mapping:
+  PsychInitScreenToHeadMappings(numDisplays);
 
   return;
 }
@@ -742,6 +835,16 @@ float PsychGetNominalFramerate(int screenNumber)
 
     // Divide vrefresh by 1000 to get real Hz - value:
     vrefresh = vrefresh / 1000.0f;
+
+    // Definitions from xserver's hw/xfree86/common/xf86str.h
+    // V_INTERLACE	= 0x0010,
+    // V_DBLSCAN	= 0x0020,
+
+    // Doublescan mode? If so, divide vrefresh by 2:
+    if (mode_line.flags & 0x0020) vrefresh /= 2;
+
+    // Interlaced mode? If so, multiply vrefresh by 2:
+    if (mode_line.flags & 0x0010) vrefresh *= 2;
   }
 
   // Done.
@@ -1143,7 +1246,7 @@ void PsychReadNormalizedGammaTable(int screenNumber, int *numEntries, float **re
   return;
 }
 
-void PsychLoadNormalizedGammaTable(int screenNumber, int numEntries, float *redTable, float *greenTable, float *blueTable)
+unsigned int PsychLoadNormalizedGammaTable(int screenNumber, int numEntries, float *redTable, float *greenTable, float *blueTable)
 {
 #ifdef USE_VIDMODEEXTS
 
@@ -1169,7 +1272,8 @@ void PsychLoadNormalizedGammaTable(int screenNumber, int numEntries, float *redT
   XF86VidModeSetGammaRamp(cgDisplayID, PsychGetXScreenIdForScreen(screenNumber), 256, (unsigned short*) RTable, (unsigned short*) GTable, (unsigned short*) BTable);
 #endif
 
-  return;
+  // Return "success":
+  return(1);
 }
 
 // PsychGetDisplayBeamPosition() contains the implementation of display beamposition queries.
@@ -1182,39 +1286,44 @@ void PsychLoadNormalizedGammaTable(int screenNumber, int numEntries, float *redT
 //
 int PsychGetDisplayBeamPosition(CGDirectDisplayID cgDisplayId, int screenNumber)
 {
-  // Beamposition queries aren't supported by the X11 graphics system.
-  // However, for gfx-hardware where we have reliable register specs, we
-  // can do it ourselves, bypassing the X server.
+	// Beamposition queries aren't supported by the X11 graphics system.
+	// However, for gfx-hardware where we have reliable register specs, we
+	// can do it ourselves, bypassing the X server.
+	
+	// On systems that we can't handle, we return -1 as an indicator
+	// to high-level routines that we don't know the rasterbeam position.
+	int vblbias, vbltotal;
+	int beampos = -1;
 
-  // On systems that we can't handle, we return -1 as an indicator
-  // to high-level routines that we don't know the rasterbeam position.
-  int beampos = -1;
-  
-  // Currently we can do do-it-yourself-style beamposition queries for
-  // ATI's Radeon X1000, HD2000/3000 series chips due to availability of
-  // hardware register specs. See top of this file for the setup and
-  // shutdown code for the memory mapped access mechanism.
-  if (gfx_cntl_mem) {
-	  // Beampositionquery workaround requested?
-	  if (PsychPrefStateGet_ConserveVRAM() & kPsychUseBeampositionQueryWorkaround) {
-		  // Yes: Avoid queries that return zero -- If query result is zero, retry
-		  // until it becomes non-zero:
-		  // Some hardware may needs this to resolve...
-		  while (0 == (int) ( radeon_get((displayScreensToPipes[screenNumber] == 0) ? RADEON_D1CRTC_STATUS_POSITION : RADEON_D2CRTC_STATUS_POSITION) & RADEON_VBEAMPOSITION_BITMASK) );
-	  }
-
-	  // Ok, supported chip and setup worked. Read the mmapped register,
-	  // either for CRTC-1 if pipe for this screen is zero, or CRTC-2 otherwise:
-	  beampos = radeon_get((displayScreensToPipes[screenNumber] == 0) ? RADEON_D1CRTC_STATUS_POSITION : RADEON_D2CRTC_STATUS_POSITION) & RADEON_VBEAMPOSITION_BITMASK;
-
-	  // Query end-offset of VBLANK interval of this GPU and correct for it:
-	  beampos = beampos - (int) ((radeon_get((displayScreensToPipes[screenNumber] == 0) ? AVIVO_D1CRTC_V_BLANK_START_END : AVIVO_D2CRTC_V_BLANK_START_END) >> 16) & RADEON_VBEAMPOSITION_BITMASK);
-
-	  if (beampos < 0) beampos = ((int) radeon_get((displayScreensToPipes[screenNumber] == 0) ? AVIVO_D1CRTC_V_TOTAL : AVIVO_D2CRTC_V_TOTAL)) + beampos;
-  }
-
-  // Return our result or non-result:
-  return(beampos);
+	// Get beamposition from low-level driver code:
+	if (PsychOSIsKernelDriverAvailable(screenNumber)) {
+		// Is application of the beamposition workaround requested by high-level code?
+		// Or is this a NVidia GPU? In the latter case we always use the workaround,
+		// because many NVidia GPU's (especially pre NV-50 hardware) need this in many
+		// setups. It helps if needed, and doesn't hurt if not needed - burns at most
+		// 25 insignificant microseconds of time.
+		if ((PsychPrefStateGet_ConserveVRAM() & kPsychUseBeampositionQueryWorkaround) ||
+		    (fDeviceType == kPsychGeForce)) {
+			// Yes: Avoid queries that return zero -- If query result is zero, retry
+			// until it becomes non-zero: Some hardware may needs this to resolve...
+			while (0 == (beampos = PsychOSKDGetBeamposition(screenNumber)));
+		} else {
+			// Read final beampos:
+			beampos = PsychOSKDGetBeamposition(screenNumber);
+		}
+	}
+	
+	// Return failure, if indicated:
+	if (beampos == -1) return(-1);
+	
+	// Apply corrective offsets if any (i.e., if non-zero):
+	// Note: In case of Radeon's, these are zero, because the code above already has applied proper corrections.
+	PsychGetBeamposCorrection(screenNumber, &vblbias, &vbltotal);
+	beampos = beampos - vblbias;
+	if (beampos < 0) beampos = vbltotal + beampos;
+	
+	// Return our result or non-result:
+	return(beampos);
 }
 
 // Try to attach to kernel level ptb support driver and setup everything, if it works:
@@ -1251,7 +1360,7 @@ int PsychOSCheckKDAvailable(int screenId, unsigned int * status)
 	// but we don't have such a thing yet.  Could be also a pointer to a little struct with all
 	// relevant info...
 	// Currently we do a dummy assignment...
-	int connect = displayScreensToPipes[screenId];
+	int connect = PsychScreenToHead(screenId);
 
 	if ((numKernelDrivers<=0) && (gfx_cntl_mem == NULL)) {
 		if (status) *status = ENODEV;
@@ -1271,36 +1380,174 @@ int PsychOSCheckKDAvailable(int screenId, unsigned int * status)
 	return(connect);
 }
 
-
 unsigned int PsychOSKDReadRegister(int screenId, unsigned int offset, unsigned int* status)
 {
 	// Check availability of connection:
 	int connect;
-	if (!(connect = PsychOSCheckKDAvailable(screenId, status))) return(0xffffffff);
+	if (!(connect = PsychOSCheckKDAvailable(screenId, status))) {
+		return(0xffffffff);
+		if (status) *status = ENODEV;
+	}
+	
 	if (status) *status = 0;
 
 	// Return readback register value:
-	return(radeon_get(offset));
+	return(ReadRegister(offset));
 }
 
 unsigned int PsychOSKDWriteRegister(int screenId, unsigned int offset, unsigned int value, unsigned int* status)
 {
 	// Check availability of connection:
 	int connect;
-	if (!(connect = PsychOSCheckKDAvailable(screenId, status))) return(0xffffffff);
+	if (!(connect = PsychOSCheckKDAvailable(screenId, status))) {
+		return(0xffffffff);
+		if (status) *status = ENODEV;
+	}
+
 	if (status) *status = 0;
 
 	// Write the register:
-	radeon_set(offset, value);
+	WriteRegister(offset, value);
 	
 	// Return success:
 	return(0);
 }
 
+// Synchronize display screens video refresh cycle of DCE-4 (and later) GPU's, aka Evergreen. See PsychSynchronizeDisplayScreens() for help and details...
+static PsychError PsychOSSynchronizeDisplayScreensDCE4(int *numScreens, int* screenIds, int* residuals, unsigned int syncMethod, double syncTimeOut, int allowedResidual)
+{
+	int								screenId = 0;
+	double							abortTimeOut, now;
+	int								residual;
+	unsigned int					i;
+	unsigned int					old_crtc_master_enable = 0;
+	
+	// Check availability of connection:
+	int								connect;
+	unsigned int					status;
+
+	// No support for other methods than fast hard sync:
+	if (syncMethod > 1) {
+		if (PsychPrefStateGet_Verbosity() > 1) printf("PTB-WARNING: Could not execute display resync operation with requested non hard sync method. Not supported for this setup and settings.\n"); 
+		return(PsychError_unimplemented);
+	}
+	
+	// The current implementation only supports syncing all heads of a single card
+	if (*numScreens <= 0) {
+		// Resync all displays requested: Choose screenID zero for connect handle:
+		screenId = 0;
+	}
+	else {
+		// Resync of specific display requested: We only support resync of all heads of a single multi-head card,
+		// therefore just choose the screenId of the passed master-screen for resync handle:
+		screenId = screenIds[0];
+	}
+	
+	if (!(connect = PsychOSCheckKDAvailable(screenId, &status))) {
+		if (PsychPrefStateGet_Verbosity() > 1) printf("PTB-WARNING: Could not execute display resync operation for master screenId %i. Not supported for this setup and settings.\n", screenId); 
+		return(PsychError_unimplemented);
+	}
+	
+	if (fDeviceType != kPsychRadeon) {
+		printf("PTB-INFO: PsychOSSynchronizeDisplayScreens(): This function is not supported on non-ATI/AMD GPU's! Aborted.\n");
+		return(PsychError_unimplemented);
+	}
+
+	// Setup deadline for abortion or repeated retries:
+	PsychGetAdjustedPrecisionTimerSeconds(&abortTimeOut);
+	abortTimeOut+=syncTimeOut;
+	residual = INT_MAX;
+	
+	// Repeat until timeout or good enough result:
+	do {
+		// If this isn't the first try, wait 0.5 secs before retry:
+		if (residual != INT_MAX) PsychWaitIntervalSeconds(0.5);
+		
+		residual = INT_MAX;
+		
+		if (PsychPrefStateGet_Verbosity() > 3) printf("PTB-INFO: PsychOSSynchronizeDisplayScreens(): About to resynchronize all DCE-4 display heads by use of a 1 second CRTC stop->start cycle:\n");
+
+		if (PsychPrefStateGet_Verbosity() > 3) {
+			printf("Trying to stop and reset all display heads by disabling them one by one.\n");
+			printf("Will wait individually for each head to reach its defined resting position.\n");
+		}
+		
+		// Detect enabled heads:
+		old_crtc_master_enable = 0;
+		for (i = 0; i < 6; i++) {
+			// Bit 16 "CRTC_CURRENT_MASTER_EN_STATE" allows read-only polling
+			// of current activation state of crtc:
+			if (ReadRegister(EVERGREEN_CRTC_CONTROL + crtcoff[i]) & (0x1 << 16)) old_crtc_master_enable |= (0x1 << i);
+		}
+
+		// Shut down heads, one after each other, wait for each one to settle at its defined resting position:
+		for (i = 0; i < 6; i++) {
+			if (PsychPrefStateGet_Verbosity() > 3) printf("Head %ld ...  ", i);
+			if (old_crtc_master_enable & (0x1 << i)) {		
+				if (PsychPrefStateGet_Verbosity() > 3) printf("active -> Shutdown. ");
+
+				// Shut down this CRTC by clearing its master enable bit (bit 0):
+				WriteRegister(EVERGREEN_CRTC_CONTROL + crtcoff[i], ReadRegister(EVERGREEN_CRTC_CONTROL + crtcoff[i]) & ~(0x1 << 0));
+				
+				// Wait 50 msecs, so CRTC has enough time to settle and disable at its
+				// programmed resting position:
+				PsychWaitIntervalSeconds(0.050);
+				
+				// Double check - Poll until crtc is offline:
+				while(ReadRegister(EVERGREEN_CRTC_CONTROL + crtcoff[i]) & (0x1 << 16));
+				if (PsychPrefStateGet_Verbosity() > 3) printf("-> Offline.\n");
+			}
+			else {
+				if (PsychPrefStateGet_Verbosity() > 3) printf("already offline.\n");
+			}
+		}
+		
+		// Need realtime priority for following synchronized start to minimize delays:
+		PsychRealtimePriority(true);
+
+		// Sleep for 1 second: This is a blocking call, ie. the thread goes to sleep and may wakeup a bit later:
+		PsychWaitIntervalSeconds(1);
+		
+		// Reenable all now disabled, but previously enabled display heads.
+		// This must be a tight loop, as every microsecond counts for a good sync...
+		for (i = 0; i < 6; i++) {
+			if (old_crtc_master_enable & (0x1 << i)) {		
+				// Restart this CRTC by setting its master enable bit (bit 0):
+				WriteRegister(EVERGREEN_CRTC_CONTROL + crtcoff[i], ReadRegister(EVERGREEN_CRTC_CONTROL + crtcoff[i]) | (0x1 << 0));
+			}
+		}
+		
+		// Done with realtime bits:
+		PsychRealtimePriority(false);
+
+		// We don't have meaningful residual info. Just assume we succeeded:
+		residual = 0;
+		if (PsychPrefStateGet_Verbosity() > 2) printf("PTB-INFO: Graphics display heads hopefully resynchronized.\n");
+		
+		// Timestamp:
+		PsychGetAdjustedPrecisionTimerSeconds(&now);
+	} while ((now < abortTimeOut) && (abs(residual) > allowedResidual));
+	
+	// Return residual value if wanted:
+	if (residuals) { 
+		residuals[0] = residual;
+	}
+	
+	if (abs(residual) > allowedResidual) {
+		if (PsychPrefStateGet_Verbosity() > 1) printf("PTB-WARNING: Failed to synchronize heads down to the allowable residual of +/- %i scanlines. Final residual %i lines.\n", allowedResidual, residual);
+	}
+	
+	// TODO: Error handling not really worked out...
+	if (residual == INT_MAX) return(PsychError_system);
+	
+	// Done.
+	return(PsychError_none);
+}
+
 // Helper function for PsychOSSynchronizeDisplayScreens().
 static unsigned int GetBeamPosition(int headId)
 {
-	  return((unsigned int) radeon_get((headId == 0) ? RADEON_D1CRTC_STATUS_POSITION : RADEON_D2CRTC_STATUS_POSITION) & RADEON_VBEAMPOSITION_BITMASK);
+	  return((unsigned int) ReadRegister((headId == 0) ? RADEON_D1CRTC_STATUS_POSITION : RADEON_D2CRTC_STATUS_POSITION) & RADEON_VBEAMPOSITION_BITMASK);
 }
 
 // Synchronize display screens video refresh cycle. See PsychSynchronizeDisplayScreens() for help and details...
@@ -1340,6 +1587,17 @@ PsychError PsychOSSynchronizeDisplayScreens(int *numScreens, int* screenIds, int
 		return(PsychError_unimplemented);
 	}
 	
+	if (fDeviceType != kPsychRadeon) {
+		printf("PTB-INFO: PsychOSSynchronizeDisplayScreens(): This function is not supported on non-ATI/AMD GPU's! Aborted.\n");
+		return(PsychError_unimplemented);
+	}
+
+	// DCE-4 display engine of Evergreen or later?
+	if (isDCE4(screenId) || isDCE5(screenId)) {
+		// Yes. Use DCE-4 specific sync routine:
+		return(PsychOSSynchronizeDisplayScreensDCE4(numScreens, screenIds, residuals, syncMethod, syncTimeOut, allowedResidual));
+	}
+	
 	// Setup deadline for abortion or repeated retries:
 	PsychGetAdjustedPrecisionTimerSeconds(&abortTimeOut);
 	abortTimeOut+=syncTimeOut;
@@ -1364,7 +1622,7 @@ PsychError PsychOSSynchronizeDisplayScreens(int *numScreens, int* screenIds, int
 		
 		// Query the CRTC scan-converter master enable state: Bit 0 (value 0x1) controls Pipeline 1,
 		// whereas Bit 1(value 0x2) controls Pipeline 2:
-		old_crtc_master_enable = radeon_get(RADEON_DC_CRTC_MASTER_ENABLE);
+		old_crtc_master_enable = ReadRegister(RADEON_DC_CRTC_MASTER_ENABLE);
 		if (PsychPrefStateGet_Verbosity() > 3) {
 			printf("Current CRTC Master enable state is %ld . Trying to stop and reset all display heads.\n", old_crtc_master_enable);
 			printf("Will wait individually for each head to get close to scanline 0, then disable it.\n");
@@ -1388,8 +1646,8 @@ PsychError PsychOSSynchronizeDisplayScreens(int *numScreens, int* screenIds, int
 				
 				// Start of new refresh interval! Shut down this heads CRTC!
 				// We do so by clearing enable bit for this head:
-				radeon_set(RADEON_DC_CRTC_MASTER_ENABLE, radeon_get(RADEON_DC_CRTC_MASTER_ENABLE) & ~(0x1 << i));
-				if (PsychPrefStateGet_Verbosity() > 3) printf("New state is %ld.\n", radeon_get(RADEON_DC_CRTC_MASTER_ENABLE));
+				WriteRegister(RADEON_DC_CRTC_MASTER_ENABLE, ReadRegister(RADEON_DC_CRTC_MASTER_ENABLE) & ~(0x1 << i));
+				if (PsychPrefStateGet_Verbosity() > 3) printf("New state is %ld.\n", ReadRegister(RADEON_DC_CRTC_MASTER_ENABLE));
 				
 				// Head should be down, close to scanline 0.
 				PsychWaitIntervalSeconds(0.050);
@@ -1400,13 +1658,13 @@ PsychError PsychOSSynchronizeDisplayScreens(int *numScreens, int* screenIds, int
 		}
 		
 		// All display heads should be disabled now.
-		PsychWaitIntervalSeconds(0.020);
+		PsychWaitIntervalSeconds(0.100);
 		
 		// Query current beamposition and check state:
 		beampos0 = GetBeamPosition(0);
 		beampos1 = GetBeamPosition(1);
 		
-		new_crtc_master_enable = radeon_get(RADEON_DC_CRTC_MASTER_ENABLE);
+		new_crtc_master_enable = ReadRegister(RADEON_DC_CRTC_MASTER_ENABLE);
 		
 		if (new_crtc_master_enable == 0) {
 			if (PsychPrefStateGet_Verbosity() > 3) printf("CRTC's down (state %ld): Beampositions are [0]=%ld and [1]=%ld. Synchronized restart in 1 second...\n", new_crtc_master_enable, beampos0, beampos1);
@@ -1419,12 +1677,12 @@ PsychError PsychOSSynchronizeDisplayScreens(int *numScreens, int* screenIds, int
 		PsychWaitIntervalSeconds(1);
 		
 		// Reset all display heads enable state to original setting:
-		radeon_set(RADEON_DC_CRTC_MASTER_ENABLE, old_crtc_master_enable);
+		WriteRegister(RADEON_DC_CRTC_MASTER_ENABLE, old_crtc_master_enable);
 		
 		// Query position and state after restart:
 		beampos0 = GetBeamPosition(0);
 		beampos1 = GetBeamPosition(1);
-		new_crtc_master_enable = radeon_get(RADEON_DC_CRTC_MASTER_ENABLE);
+		new_crtc_master_enable = ReadRegister(RADEON_DC_CRTC_MASTER_ENABLE);
 		if (new_crtc_master_enable == old_crtc_master_enable) {
 			if (PsychPrefStateGet_Verbosity() > 3) printf("CRTC's restarted in sync: Master enable state is %ld. Beampositions after restart: [0]=%ld and [1]=%ld.\n", new_crtc_master_enable, beampos0, beampos1);
 		}
@@ -1472,6 +1730,385 @@ PsychError PsychOSSynchronizeDisplayScreens(int *numScreens, int* screenIds, int
 
 int PsychOSKDGetBeamposition(int screenId)
 {
-	// No-Op: This is implemented in PsychGetBeamposition() above directly...
-	return(-1);
+	int beampos = -1;
+	int headId  = PsychScreenToHead(screenId);
+
+	// MMIO registers mapped?
+	if (gfx_cntl_mem) {
+		// Query code for ATI/AMD Radeon/FireGL/FirePro:
+		if (fDeviceType == kPsychRadeon) {
+			if (isDCE4(screenId) || isDCE5(screenId)) {
+				// DCE-4 display engine (CEDAR and later afaik): Up to six crtc's.
+                if (headId > DCE4_MAXHEADID) {
+                    printf("PTB-ERROR: PsychOSKDGetBeamposition: Invalid headId %i provided! Must be between 0-5!\n", headId);
+                    return(beampos);
+				}
+                
+				// Read raw beampostion from GPU:
+				beampos = (int) (ReadRegister(EVERGREEN_CRTC_STATUS_POSITION + crtcoff[headId]) & RADEON_VBEAMPOSITION_BITMASK);
+				
+				// Query end-offset of VBLANK interval of this GPU and correct for it:
+				beampos = beampos - (int) ((ReadRegister(EVERGREEN_CRTC_V_BLANK_START_END + crtcoff[headId]) >> 16) & RADEON_VBEAMPOSITION_BITMASK);
+				
+				// Correction for in-VBLANK range:
+				if (beampos < 0) beampos = ((int) ReadRegister(EVERGREEN_CRTC_V_TOTAL + crtcoff[headId])) + beampos;
+				
+			} else {
+				// AVIVO display engine (R300 - R600 afaik): At most two display heads for dual-head gpu's.
+				
+				// Read raw beampostion from GPU:
+				beampos = (int) (ReadRegister((headId == 0) ? RADEON_D1CRTC_STATUS_POSITION : RADEON_D2CRTC_STATUS_POSITION) & RADEON_VBEAMPOSITION_BITMASK);
+				
+				// Query end-offset of VBLANK interval of this GPU and correct for it:
+				beampos = beampos - (int) ((ReadRegister((headId == 0) ? AVIVO_D1CRTC_V_BLANK_START_END : AVIVO_D2CRTC_V_BLANK_START_END) >> 16) & RADEON_VBEAMPOSITION_BITMASK);
+				
+				// Correction for in-VBLANK range:
+				if (beampos < 0) beampos = ((int) ReadRegister((headId == 0) ? AVIVO_D1CRTC_V_TOTAL : AVIVO_D2CRTC_V_TOTAL)) + beampos;
+			}
+		}
+		
+		// Query code for NVidia GeForce/Quadro:
+		if (fDeviceType == kPsychGeForce) {
+			// Pre NV-50 GPU? [Anything before GeForce-8 series]
+			if (fCardType < 0x50) {
+				// Pre NV-50, e.g., RivaTNT-1/2 and all GeForce 256/2/3/4/5/FX/6/7:
+				
+				// Lower 12 bits are vertical scanout position (scanline), bit 16 is "in vblank" indicator.
+				// Offset between crtc's is 0x2000, we're only interested in scanline, not "in vblank" status:
+				// beampos = (int) (ReadRegister((headId == 0) ? 0x600808 : 0x600808 + 0x2000) & 0xFFF);
+
+				// NV-47: Lower 16 bits are vertical scanout position (scanline), upper 16 bits are horizontal
+				// scanout position. Offset between crtc's is 0x2000. We only use the lower 16 bits and
+				// ignore horizontal scanout position for now:
+				beampos = (int) (ReadRegister((headId == 0) ? 0x600868 : 0x600868 + 0x2000) & 0xFFFF);
+			} else {
+				// NV-50 (GeForce-8) and later:
+				
+				// Lower 16 bits are vertical scanout position (scanline), upper 16 bits are vblank counter.
+				// Offset between crtc's is 0x800, we're only interested in scanline, not vblank counter:
+				beampos = (int) (ReadRegister((headId == 0) ? 0x616340 : 0x616340 + 0x800) & 0xFFFF);
+			}
+		}
+
+		// Query code for Intel IGP's:
+		if (fDeviceType == kPsychIntelIGP) {
+				beampos = (int) (ReadRegister((headId == 0) ? 0x70000 : 0x70000 + 0x1000) & 0x1FFF);
+		}
+
+		// Safety measure: Cap to zero if something went wrong -> This will trigger proper high level error handling in PTB:
+		if (beampos < 0) beampos = -1;
+	}
+
+	return(beampos);
+}
+
+// Try to change hardware dither mode on GPU:
+void PsychOSKDSetDitherMode(int screenId, unsigned int ditherOn)
+{
+    static unsigned int oldDither[(DCE4_MAXHEADID + 1)] = { 0, 0, 0, 0, 0, 0 };
+    unsigned int reg;
+	int headId  = (screenId >= 0) ? PsychScreenToHead(screenId) : -screenId;
+    
+    // MMIO registers mapped?
+	if (!gfx_cntl_mem) return;
+
+    // AMD/ATI Radeon, FireGL or FirePro GPU?
+	if (fDeviceType == kPsychRadeon) {
+        if (PsychPrefStateGet_Verbosity() > 2) printf("PTB-INFO: SetDitherMode: Trying to %s digital display dithering on display head %d.\n", (ditherOn) ? "enable" : "disable", headId);
+
+        // Map headId to proper hardware control register offset:
+		if (isDCE4(screenId) || isDCE5(screenId)) {
+			// DCE-4 display engine (CEDAR and later afaik): Up to six crtc's. Map to proper
+            // register offset for this headId:
+            if (headId > DCE4_MAXHEADID) {
+                // Invalid head - bail:
+                if (PsychPrefStateGet_Verbosity() > 0) printf("SetDitherMode: ERROR! Invalid headId %d provided. Must be between 0 and 5. Aborted.\n", headId);
+                return;
+            }
+
+            // Map to dither format control register for head 'headId':
+            reg = EVERGREEN_FMT_BIT_DEPTH_CONTROL + crtcoff[headId];
+		} else {
+			// AVIVO display engine (R300 - R600 afaik): At most two display heads for dual-head gpu's.
+            if (headId > 1) {
+                if (PsychPrefStateGet_Verbosity() > 2) printf("PTB-INFO: SetDitherMode: INFO! Special headId %d outside valid dualhead range 0-1 provided. Will control LVDS dithering.\n", headId);
+                headId = 0;
+            }
+            else {
+                if (PsychPrefStateGet_Verbosity() > 2) printf("PTB-INFO: SetDitherMode: INFO! headId %d in valid dualhead range 0-1 provided. Will control TMDS (DVI et al.) dithering.\n", headId);
+                headId = 1;
+            }
+            
+            // On AVIVO we can't control dithering per display head. Instead there's one global switch
+            // for LVDS connected displays (LVTMA) aka internal flat panels, e.g., of Laptops, and
+            // on global switch for "all things DVI-D", aka TMDSA:
+            reg = (headId == 0) ? RADEON_LVTMA_BIT_DEPTH_CONTROL : RADEON_TMDSA_BIT_DEPTH_CONTROL;
+		}
+
+        // Perform actual enable/disable/reconfigure sequence for target encoder/head:
+
+        // Enable dithering?
+        if (ditherOn) {
+            // Reenable dithering with old, previously stored settings, if it is disabled:
+            
+            // Dithering currently off (all zeros)?
+            if (ReadRegister(reg) == 0) {
+                // Dithering is currently off. Do we know the old setting from a previous
+                // disable?
+                if (oldDither[headId] > 0) {
+                    // Yes: Restore old "factory settings":
+                    if (PsychPrefStateGet_Verbosity() > 2) printf("PTB-INFO: SetDitherMode: Dithering previously disabled by us. Reenabling with old control setting %x.\n", oldDither[headId]);
+                    WriteRegister(reg, oldDither[headId]);
+                }
+                else {
+                    // No: Dithering was disabled all the time, so we don't know the
+                    // OS defaults. Use the numeric value of 'ditherOn' itself:
+                    if (PsychPrefStateGet_Verbosity() > 2) printf("PTB-INFO: SetDitherMode: Dithering off. Enabling with userspace provided setting %x. Cross your fingers!\n", ditherOn);
+                    WriteRegister(reg, ditherOn);
+                }
+            }
+            else {
+                if (PsychPrefStateGet_Verbosity() > 2) printf("PTB-INFO: SetDitherMode: Dithering already enabled with current control value %x. Skipped.\n", ReadRegister(reg));
+            }
+        }
+        else {
+            // Disable all dithering if it is enabled: Clearing the register to all zero bits does this.
+            if (ReadRegister(reg) > 0) {
+                oldDither[headId] = ReadRegister(reg);
+                if (PsychPrefStateGet_Verbosity() > 2) printf("PTB-INFO: SetDitherMode: Current dither setting before our dither disable on head %d is %x. Disabling.\n", headId, oldDither[headId]);
+                WriteRegister(reg, 0x0);
+            }
+            else {
+                if (PsychPrefStateGet_Verbosity() > 2) printf("PTB-INFO: SetDitherMode: Dithering already disabled. Skipped.\n");
+            }
+        }
+        
+        // End of Radeon et al. support code.
+	}
+    else {
+        // Other unsupported GPU:
+        if (PsychPrefStateGet_Verbosity() > 2) printf("PTB-INFO: SetDitherMode: Tried to call me on a non ATI/AMD GPU. Unsupported.\n");
+    }
+    
+	return;
+}
+
+// Query if LUT for given headId is all-zero: 0 = Something else, 1 = Zero-LUT, 2 = It's an identity LUT,
+// 3 = Not-quite-identity mapping, 0xffffffff = don't know.
+unsigned int PsychOSKDGetLUTState(int screenId, unsigned int headId, unsigned int debug)
+{
+    unsigned int i, v, r, m, bo, wo, offset, reg;
+    unsigned int isZero = 1;
+    unsigned int isIdentity = 1;
+    
+    // AMD GPU's:
+	if (fDeviceType == kPsychRadeon) {
+        if (PsychPrefStateGet_Verbosity() > 3) printf("PsychOSKDGetLUTState(): Checking LUT and bias values on GPU for headId %d.\n", headId);
+
+        if (isDCE4(screenId) || isDCE5(screenId)) {
+            // DCE-4.0 and later: Up to (so far) six display heads:
+            if (headId > DCE4_MAXHEADID) {
+                // Invalid head - bail:
+                if (PsychPrefStateGet_Verbosity() > 2) printf("PsychOSKDGetLUTState: ERROR! Invalid headId %d provided. Must be between 0 and 5. Aborted.\n", headId);
+                return(0xffffffff);
+            }
+
+            offset = crtcoff[headId];
+            WriteRegister(EVERGREEN_DC_LUT_RW_MODE + offset, 0);
+            WriteRegister(EVERGREEN_DC_LUT_RW_INDEX + offset, 0);
+            reg = EVERGREEN_DC_LUT_30_COLOR + offset;
+            
+            // Find out if there are non-zero black offsets:
+            bo = 0x0;
+            bo|= ReadRegister(EVERGREEN_DC_LUT_BLACK_OFFSET_BLUE + offset);
+            bo|= ReadRegister(EVERGREEN_DC_LUT_BLACK_OFFSET_GREEN + offset);
+            bo|= ReadRegister(EVERGREEN_DC_LUT_BLACK_OFFSET_RED + offset);
+            
+            // Find out if there are non-0xffff white offsets:
+            wo = 0x0;
+            wo|= 0xffff - ReadRegister(EVERGREEN_DC_LUT_WHITE_OFFSET_BLUE + offset);
+            wo|= 0xffff - ReadRegister(EVERGREEN_DC_LUT_WHITE_OFFSET_GREEN + offset);
+            wo|= 0xffff - ReadRegister(EVERGREEN_DC_LUT_WHITE_OFFSET_RED + offset);
+        }
+        else {
+            // AVIVO: Dualhead.
+            offset = (headId > 0) ? 0x800 : 0x0;
+            WriteRegister(AVIVO_DC_LUT_RW_SELECT, headId & 0x1);
+            WriteRegister(AVIVO_DC_LUT_RW_MODE, 0);
+            WriteRegister(AVIVO_DC_LUT_RW_INDEX, 0);
+            reg = AVIVO_DC_LUT_30_COLOR;
+
+            // Find out if there are non-zero black offsets:
+            bo = 0x0;
+            bo|= ReadRegister(AVIVO_DC_LUTA_BLACK_OFFSET_BLUE + offset);
+            bo|= ReadRegister(AVIVO_DC_LUTA_BLACK_OFFSET_GREEN + offset);
+            bo|= ReadRegister(AVIVO_DC_LUTA_BLACK_OFFSET_RED + offset);
+            
+            // Find out if there are non-0xffff white offsets:
+            wo = 0x0;
+            wo|= 0xffff - ReadRegister(AVIVO_DC_LUTA_WHITE_OFFSET_BLUE + offset);
+            wo|= 0xffff - ReadRegister(AVIVO_DC_LUTA_WHITE_OFFSET_GREEN + offset);
+            wo|= 0xffff - ReadRegister(AVIVO_DC_LUTA_WHITE_OFFSET_RED + offset);
+        }
+
+        if (debug) if (PsychPrefStateGet_Verbosity() > 3) printf("PsychOSKDOffsets: Black %d : White %d.\n", bo, wo);
+        
+        for (i = 0; i < 256; i++) {            
+            // Read 32 bit value of this slot, mask out upper 2 bits,
+            // so the least significant 30 bits are left, as these
+            // contain the 3 * 10 bits for the 10 bit R,G,B channels:
+            v = ReadRegister(reg) & (0xffffffff >> 2);
+            
+            // All zero as they should be for a all-zero LUT?
+            if (v > 0) isZero = 0;
+            
+            // Compare with expected value in slot i for a perfect 10 bit identity LUT
+            // intended for a 8 bit output encoder, i.e., 2 least significant bits
+            // zero to avoid dithering and similar stuff:
+            r = i << 2;
+            m = (r << 20) | (r << 10) | (r << 0); 
+            
+            // Mismatch? Not a perfect identity LUT:
+            if (v != m) isIdentity = 0;
+
+            if (PsychPrefStateGet_Verbosity() > 4) {
+                printf("%d:%d,%d,%d\n", i, (v >> 20) & 0x3ff, (v >> 10) & 0x3ff, (v >> 0) & 0x3ff);
+            }
+        }
+
+        if (isZero) return(1);  // All zero LUT.
+
+        if (isIdentity) {
+            // If wo or bo is non-zero then it is not quite an identity
+            // mapping, as the black and white offset are not neutral.
+            // Return 3 in this case:
+            if ((wo | bo) > 0) return(3);
+            
+            // Perfect identity LUT:
+            return(2);
+        }
+
+        // Regular LUT:
+        return(0);
+	}
+
+    // Unhandled:
+    if (PsychPrefStateGet_Verbosity() > 3) printf("PsychOSKDGetLUTState(): This function is not supported on this GPU. Returning 0xffffffff.\n");
+    return(0xffffffff);
+}
+
+// Load an identity LUT into display head 'headid': Return 1 on success, 0 on failure or if unsupported for this GPU:
+unsigned int PsychOSKDLoadIdentityLUT(int screenId, unsigned int headId)
+{
+    unsigned int i, r, m, offset, reg;
+    
+    // AMD GPU's:
+	if (fDeviceType == kPsychRadeon) {
+        if (PsychPrefStateGet_Verbosity() > 3) printf("PsychOSKDLoadIdentityLUT(): Uploading identity LUT and bias values into GPU for headId %d.\n", headId);
+
+        if (isDCE4(screenId) || isDCE5(screenId)) {
+            // DCE-4.0 and later: Up to (so far) six display heads:
+            if (headId > DCE4_MAXHEADID) {
+                // Invalid head - bail:
+                if (PsychPrefStateGet_Verbosity() > 3) printf("PsychOSKDLoadIdentityLUT: ERROR! Invalid headId %d provided. Must be between 0 and 5. Aborted.\n", headId);
+                return(0);
+            }
+
+            offset = crtcoff[headId];
+            reg = EVERGREEN_DC_LUT_30_COLOR + offset;
+            
+            WriteRegister(EVERGREEN_DC_LUT_CONTROL + offset, 0);
+
+            if (isDCE5(screenId)) {
+                WriteRegister(NI_INPUT_CSC_CONTROL + offset,
+                              (NI_INPUT_CSC_GRPH_MODE(NI_INPUT_CSC_BYPASS) |
+                               NI_INPUT_CSC_OVL_MODE(NI_INPUT_CSC_BYPASS)));
+                WriteRegister(NI_PRESCALE_GRPH_CONTROL + offset,
+                              NI_GRPH_PRESCALE_BYPASS);
+                WriteRegister(NI_PRESCALE_OVL_CONTROL + offset,
+                              NI_OVL_PRESCALE_BYPASS);
+                WriteRegister(NI_INPUT_GAMMA_CONTROL + offset,
+                              (NI_GRPH_INPUT_GAMMA_MODE(NI_INPUT_GAMMA_USE_LUT) |
+                               NI_OVL_INPUT_GAMMA_MODE(NI_INPUT_GAMMA_USE_LUT)));
+            }
+
+            // Set zero black offsets:
+            WriteRegister(EVERGREEN_DC_LUT_BLACK_OFFSET_BLUE  + offset, 0x0);
+            WriteRegister(EVERGREEN_DC_LUT_BLACK_OFFSET_GREEN + offset, 0x0);
+            WriteRegister(EVERGREEN_DC_LUT_BLACK_OFFSET_RED   + offset, 0x0);
+            
+            // Set 0xffff white offsets:
+            WriteRegister(EVERGREEN_DC_LUT_WHITE_OFFSET_BLUE  + offset, 0xffff);
+            WriteRegister(EVERGREEN_DC_LUT_WHITE_OFFSET_GREEN + offset, 0xffff);
+            WriteRegister(EVERGREEN_DC_LUT_WHITE_OFFSET_RED   + offset, 0xffff);
+
+            WriteRegister(EVERGREEN_DC_LUT_RW_MODE + offset, 0);
+            WriteRegister(EVERGREEN_DC_LUT_WRITE_EN_MASK + offset, 0x00000007);
+
+            WriteRegister(EVERGREEN_DC_LUT_RW_INDEX + offset, 0);
+
+        }
+        else {
+            // AVIVO: Dualhead.
+            offset = (headId > 0) ? 0x800 : 0x0;
+            reg = AVIVO_DC_LUT_30_COLOR;
+
+            WriteRegister(AVIVO_DC_LUTA_CONTROL + offset, 0);
+
+            // Set zero black offsets:
+            WriteRegister(AVIVO_DC_LUTA_BLACK_OFFSET_BLUE  + offset, 0x0);
+            WriteRegister(AVIVO_DC_LUTA_BLACK_OFFSET_GREEN + offset, 0x0);
+            WriteRegister(AVIVO_DC_LUTA_BLACK_OFFSET_RED   + offset, 0x0);
+            
+            // Set 0xffff white offsets:
+            WriteRegister(AVIVO_DC_LUTA_WHITE_OFFSET_BLUE  + offset, 0xffff);
+            WriteRegister(AVIVO_DC_LUTA_WHITE_OFFSET_GREEN + offset, 0xffff);
+            WriteRegister(AVIVO_DC_LUTA_WHITE_OFFSET_RED   + offset, 0xffff);
+
+            WriteRegister(AVIVO_DC_LUT_RW_SELECT, headId & 0x1);
+            WriteRegister(AVIVO_DC_LUT_RW_MODE, 0);
+            WriteRegister(AVIVO_DC_LUT_WRITE_EN_MASK, 0x0000003f);
+
+            WriteRegister(AVIVO_DC_LUT_RW_INDEX, 0);
+        }
+        
+        for (i = 0; i < 256; i++) {
+            // Compute perfect value for slot i for a perfect 10 bit identity LUT
+            // intended for a 8 bit output encoder, i.e., 2 least significant bits
+            // zero to avoid dithering and similar stuff, the 8 most significant
+            // bits for each 10 bit color channel linearly increasing one unit
+            // per slot:
+            r = i << 2;
+            m = (r << 20) | (r << 10) | (r << 0); 
+
+            // Write 32 bit value of this slot:
+            WriteRegister(reg, m);
+        }
+
+        if (isDCE5(screenId)) {
+            WriteRegister(NI_DEGAMMA_CONTROL + offset,
+                          (NI_GRPH_DEGAMMA_MODE(NI_DEGAMMA_BYPASS) |
+                           NI_OVL_DEGAMMA_MODE(NI_DEGAMMA_BYPASS) |
+                           NI_ICON_DEGAMMA_MODE(NI_DEGAMMA_BYPASS) |
+                           NI_CURSOR_DEGAMMA_MODE(NI_DEGAMMA_BYPASS)));
+            WriteRegister(NI_GAMUT_REMAP_CONTROL + offset,
+                          (NI_GRPH_GAMUT_REMAP_MODE(NI_GAMUT_REMAP_BYPASS) |
+                           NI_OVL_GAMUT_REMAP_MODE(NI_GAMUT_REMAP_BYPASS)));
+            WriteRegister(NI_REGAMMA_CONTROL + offset,
+                          (NI_GRPH_REGAMMA_MODE(NI_REGAMMA_BYPASS) |
+                           NI_OVL_REGAMMA_MODE(NI_REGAMMA_BYPASS)));
+            WriteRegister(NI_OUTPUT_CSC_CONTROL + offset,
+                          (NI_OUTPUT_CSC_GRPH_MODE(NI_OUTPUT_CSC_BYPASS) |
+                           NI_OUTPUT_CSC_OVL_MODE(NI_OUTPUT_CSC_BYPASS)));
+            /* XXX match this to the depth of the crtc fmt block, move to modeset? */
+            WriteRegister(0x6940 + offset, 0);
+        }
+        
+        // Done.
+        return(1);
+	}
+
+    // Unhandled:
+    if (PsychPrefStateGet_Verbosity() > 3) printf("PsychOSKDLoadIdentityLUT(): This function is not supported on this GPU. Returning 0.\n");
+    return(0);
 }

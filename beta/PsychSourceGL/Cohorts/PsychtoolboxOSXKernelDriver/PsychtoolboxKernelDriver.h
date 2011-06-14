@@ -3,7 +3,7 @@
 	
 	Description:	This file implements the I/O Kit driver kernel extension for Psychtoolbox (KEXT).
 
-	Copyright:		Copyright © 2008 Mario Kleiner, derived from an Apple example code.
+	Copyright:		Copyright © 2008-2011 Mario Kleiner, derived from an Apple example code.
 
 	Change History of original Apple sample code (most recent first):
 
@@ -21,10 +21,11 @@
 #include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/IOFilterInterruptEventSource.h>
 
-// Settings for member fDeviceType:
-#define kPsychUnknown 0
-#define kPsychGeForce 1
-#define kPsychRadeon  2
+// Definitions of GPU registers etc.:
+#include "PsychGraphicsCardRegisterSpecs.h"
+
+// PTB driver revision:
+#define PTBKDRevision 0
 
 struct PsychKDCommandStruct;
 
@@ -34,15 +35,20 @@ class PsychtoolboxKernelDriver : public IOService
 	
 private:
 	UInt32							fDeviceType;
-    IOPCIDevice *					fPCIDevice;
-	IOMemoryMap *					fRadeonMap;
+	UInt32							fCardType;
+	UInt16							fPCIDeviceId;
+    IOPCIDevice*					fPCIDevice;
+	IOMemoryMap*					fRadeonMap;
 	IOVirtualAddress				fRadeonRegs;
 	UInt32							fRadeonSize;
+	UInt32							fRadeonLowlimit;
+    UInt32                          fNumDisplayHeads;
 	IOFilterInterruptEventSource*	fInterruptSrc;
 	
 	UInt32							fInterruptCookie;
 	UInt32							fInterruptCounter;
 	UInt32							fVBLCounter[2];
+    UInt32                          oldDither[(DCE4_MAXHEADID + 1)];
 
 	// Initialize our own interrupt handler for snooping on gfx-card state changes:
 	bool InitializeInterruptHandler(void);	
@@ -62,9 +68,6 @@ private:
 	// Write 32 bit control register at 'offset' with 'value':
 	void	WriteRegister(UInt32 offset, UInt32 value);
 
-	// Helper function for SetDitherMode() on G80 GPUs:
-	void    G80DispCommand(UInt32 addr, UInt32 data);
-	
 	// Return current vertical rasterbeam position of display head 'headId' (0=Primary CRTC1, 1=Secondary CRTC2):
 	UInt32 GetBeamPosition(UInt32 headId);
 	
@@ -80,6 +83,21 @@ private:
 	// Dump interesting register state to system log:
 	void	DumpGfxState(void);
 	
+    // Returns multiple flags with info like PCI Vendor/device id, display engine type etc.
+    void GetGPUInfo(UInt32 *inOutArgs);
+
+    // Query if LUT for given headId is all-zero:
+    UInt32 GetLUTState(UInt32 headId, UInt32 debug);
+
+    // Load an identity LUT into display head 'headid':
+    UInt32 LoadIdentityLUT(UInt32 headId);
+
+	// Is a given ATI/AMD GPU a DCE4 type ASIC, i.e., with the new display engine?
+	bool PsychtoolboxKernelDriver::isDCE4(void);
+
+	// Is a given ATI/AMD GPU a DCE5 type ASIC, i.e., with the new display engine?
+	bool PsychtoolboxKernelDriver::isDCE5(void);
+
 public:
 	// IOService methods
 	virtual bool init(OSDictionary* dictionary = 0);

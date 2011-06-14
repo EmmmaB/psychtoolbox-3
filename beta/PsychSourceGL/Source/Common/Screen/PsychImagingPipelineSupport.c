@@ -290,7 +290,7 @@ void PsychInitializeImagingPipeline(PsychWindowRecordType *windowRecord, int ima
 
 	// Another child protection:
 	if ((windowRecord->windowType != kPsychDoubleBufferOnscreen) || PsychPrefStateGet_EmulateOldPTB()>0) {
-		PsychErrorExitMsg(PsychError_user, "Imaging Pipeline setup: Sorry, imaging pipeline only supported on double buffered onscreen windows in non-emulation mode for old PTB.\n");
+		PsychErrorExitMsg(PsychError_user, "Imaging Pipeline setup: Sorry, imaging pipeline only supported on double buffered onscreen windows and if not in emulation mode for old PTB-2.\n");
 	}
 
 	// Specific setup of pipeline if real imaging ops are requested:
@@ -357,6 +357,14 @@ void PsychInitializeImagingPipeline(PsychWindowRecordType *windowRecord, int ima
 		if (windowRecord->gfxcaps & kPsychGfxCapFPBlend32) { fboInternalFormat = GL_RGBA_FLOAT32_APPLE; windowRecord->bpc = 32; }
 	}
 
+    // Sanity check: Is a floating point framebuffer requested which requires floating point texture support and
+    // the hardware doesn't support float textures? Bail early, if so.
+    if (((windowRecord->bpc == 16) && !(windowRecord->gfxcaps & kPsychGfxCapFPTex16)) || ((windowRecord->bpc == 32) && !(windowRecord->gfxcaps & kPsychGfxCapFPTex32))) {
+        printf("PTB-ERROR: Your script requested a floating point resolution framebuffer with a resolution of more than 8 bits per color channel.\n");
+        printf("PTB-ERROR: Your graphics hardware doesn't support floating point textures or framebuffers, so this is a no-go. Aborting...\n");
+		PsychErrorExitMsg(PsychError_user, "Sorry, the requested framebuffer color resolution is not supported by your graphics card. Game over.");
+    }
+
 	if (PsychPrefStateGet_Verbosity()>2) {
 		switch(fboInternalFormat) {
 			case GL_RGBA8:
@@ -420,8 +428,8 @@ void PsychInitializeImagingPipeline(PsychWindowRecordType *windowRecord, int ima
 	// which describe the system framebuffer (backbuffer). This is done to simplify pipeline design:
 
 	// Allocate empty FBO info struct and assign it:
-	winwidth=PsychGetWidthFromRect(windowRecord->rect);
-	winheight=PsychGetHeightFromRect(windowRecord->rect);
+	winwidth=(int)PsychGetWidthFromRect(windowRecord->rect);
+	winheight=(int)PsychGetHeightFromRect(windowRecord->rect);
 
 	if (!PsychCreateFBO(&(windowRecord->fboTable[fbocount]), 0, FALSE, winwidth, winheight, 0)) {
 		// Failed!
@@ -460,7 +468,7 @@ void PsychInitializeImagingPipeline(PsychWindowRecordType *windowRecord, int ima
 		// If bit depths of native backbuffer is more than 8 bits, we allocate a float32 FBO though...
 		if (!PsychCreateFBO(&(windowRecord->fboTable[fbocount]), ((redbits <= 8) ? GL_RGBA8 : GL_RGBA_FLOAT32_APPLE), FALSE, winwidth, winheight, 0)) {
 			// Failed!
-			PsychErrorExitMsg(PsychError_internal, "Imaging Pipeline setup: Could not setup stage 0 of imaging pipeline for dual-window stereo.");
+			PsychErrorExitMsg(PsychError_system, "Imaging Pipeline setup: Could not setup stage 0 of imaging pipeline for dual-window stereo.");
 		}
 		
 		windowRecord->finalizedFBO[1]=fbocount;
@@ -475,8 +483,8 @@ void PsychInitializeImagingPipeline(PsychWindowRecordType *windowRecord, int ima
 		// C-MEX OpenGL rendering plugins...
 		
 		// Define dimensions of 1st stage FBO:
-		winwidth=PsychGetWidthFromRect(windowRecord->rect);
-		winheight=PsychGetHeightFromRect(windowRecord->rect);
+		winwidth=(int)PsychGetWidthFromRect(windowRecord->rect);
+		winheight=(int)PsychGetHeightFromRect(windowRecord->rect);
 
 		// Adapt it for some stereo modes:
 		if (windowRecord->specialflags & kPsychHalfWidthWindow) {
@@ -493,7 +501,7 @@ void PsychInitializeImagingPipeline(PsychWindowRecordType *windowRecord, int ima
 		// enabled:
 		if (!PsychCreateFBO(&(windowRecord->fboTable[fbocount]), fboInternalFormat, needzbuffer, winwidth, winheight, multiSample)) {
 			// Failed!
-			PsychErrorExitMsg(PsychError_internal, "Imaging Pipeline setup: Could not setup stage 1 of imaging pipeline.");
+			PsychErrorExitMsg(PsychError_system, "Imaging Pipeline setup: Could not setup stage 1 of imaging pipeline.");
 		}
 		
 		if ((PsychPrefStateGet_Verbosity() > 2) && (windowRecord->fboTable[fbocount]->multisample > 0)) {
@@ -508,7 +516,7 @@ void PsychInitializeImagingPipeline(PsychWindowRecordType *windowRecord, int ima
 		if (windowRecord->stereomode > 0) {
 			if (!PsychCreateFBO(&(windowRecord->fboTable[fbocount]), fboInternalFormat, needzbuffer, winwidth, winheight, multiSample)) {
 				// Failed!
-				PsychErrorExitMsg(PsychError_internal, "Imaging Pipeline setup: Could not setup stage 1 of imaging pipeline.");
+				PsychErrorExitMsg(PsychError_system, "Imaging Pipeline setup: Could not setup stage 1 of imaging pipeline.");
 			}
 			
 			// Assign this FBO as drawBuffer for right-eye channel:
@@ -562,7 +570,7 @@ void PsychInitializeImagingPipeline(PsychWindowRecordType *windowRecord, int ima
 			// Yes. Setup real inputBuffers as multisample-resolve targets:
 			if (!PsychCreateFBO(&(windowRecord->fboTable[fbocount]), fboInternalFormat, FALSE, winwidth, winheight, 0)) {
 				// Failed!
-				PsychErrorExitMsg(PsychError_internal, "Imaging Pipeline setup: Could not setup stage 1 inputBufferFBO of imaging pipeline.");
+				PsychErrorExitMsg(PsychError_system, "Imaging Pipeline setup: Could not setup stage 1 inputBufferFBO of imaging pipeline.");
 			}
 			
 			// Assign this FBO as inputBufferFBO for left-eye or mono channel:
@@ -579,7 +587,7 @@ void PsychInitializeImagingPipeline(PsychWindowRecordType *windowRecord, int ima
 			if (!targetisfinalFB) {
 				if (!PsychCreateFBO(&(windowRecord->fboTable[fbocount]), fboInternalFormat, FALSE, winwidth, winheight, 0)) {
 					// Failed!
-					PsychErrorExitMsg(PsychError_internal, "Imaging Pipeline setup: Could not setup stage 1 inputBufferFBO of imaging pipeline.");
+					PsychErrorExitMsg(PsychError_system, "Imaging Pipeline setup: Could not setup stage 1 inputBufferFBO of imaging pipeline.");
 				}
 				
 				// Assign this FBO as drawBuffer for right-eye channel:
@@ -604,8 +612,8 @@ void PsychInitializeImagingPipeline(PsychWindowRecordType *windowRecord, int ima
 		// Need real FBO's as targets for image processing:
 
 		// Define dimensions of 2nd stage FBO:
-		winwidth=PsychGetWidthFromRect(windowRecord->rect);
-		winheight=PsychGetHeightFromRect(windowRecord->rect);
+		winwidth=(int)PsychGetWidthFromRect(windowRecord->rect);
+		winheight=(int)PsychGetHeightFromRect(windowRecord->rect);
 
 		// Adapt it for some stereo modes:
 		if (windowRecord->specialflags & kPsychHalfWidthWindow) {
@@ -629,7 +637,7 @@ void PsychInitializeImagingPipeline(PsychWindowRecordType *windowRecord, int ima
 			// These FBO's don't need z- or stencil buffers anymore:
 			if (!PsychCreateFBO(&(windowRecord->fboTable[fbocount]), fboInternalFormat, FALSE, winwidth, winheight, 0)) {
 				// Failed!
-				PsychErrorExitMsg(PsychError_internal, "Imaging Pipeline setup: Could not setup stage 2 of imaging pipeline.");
+				PsychErrorExitMsg(PsychError_system, "Imaging Pipeline setup: Could not setup stage 2 of imaging pipeline.");
 			}			
 
 			// Assign this FBO as processedDrawBuffer for left-eye or mono channel:
@@ -647,7 +655,7 @@ void PsychInitializeImagingPipeline(PsychWindowRecordType *windowRecord, int ima
 				// These FBO's don't need z- or stencil buffers anymore:
 				if (!PsychCreateFBO(&(windowRecord->fboTable[fbocount]), fboInternalFormat, FALSE, winwidth, winheight, 0)) {
 					// Failed!
-					PsychErrorExitMsg(PsychError_internal, "Imaging Pipeline setup: Could not setup stage 2 of imaging pipeline.");
+					PsychErrorExitMsg(PsychError_system, "Imaging Pipeline setup: Could not setup stage 2 of imaging pipeline.");
 				}			
 				
 				// Assign this FBO as processedDrawBuffer for right-eye channel:
@@ -668,7 +676,7 @@ void PsychInitializeImagingPipeline(PsychWindowRecordType *windowRecord, int ima
 		if (imagingmode & kPsychNeedDualPass || imagingmode & kPsychNeedMultiPass) {
 			if (!PsychCreateFBO(&(windowRecord->fboTable[fbocount]), fboInternalFormat, FALSE, winwidth, winheight, 0)) {
 				// Failed!
-				PsychErrorExitMsg(PsychError_internal, "Imaging Pipeline setup: Could not setup stage 2 of imaging pipeline.");
+				PsychErrorExitMsg(PsychError_system, "Imaging Pipeline setup: Could not setup stage 2 of imaging pipeline.");
 			}
 			
 			// Assign this FBO as processedDrawBuffer for bounce buffer ops in multi-pass rendering:
@@ -694,13 +702,13 @@ void PsychInitializeImagingPipeline(PsychWindowRecordType *windowRecord, int ima
 		// Need real FBO's as targets for merger output.
 
 		// Define dimensions of 3rd stage FBO:
-		winwidth=PsychGetWidthFromRect(windowRecord->rect);
-		winheight=PsychGetHeightFromRect(windowRecord->rect);
+		winwidth=(int)PsychGetWidthFromRect(windowRecord->rect);
+		winheight=(int)PsychGetHeightFromRect(windowRecord->rect);
 
 		// These FBO's don't need z- or stencil buffers anymore:
 		if (!PsychCreateFBO(&(windowRecord->fboTable[fbocount]), fboInternalFormat, FALSE, winwidth, winheight, 0)) {
 			// Failed!
-			PsychErrorExitMsg(PsychError_internal, "Imaging Pipeline setup: Could not setup stage 3 of imaging pipeline.");
+			PsychErrorExitMsg(PsychError_system, "Imaging Pipeline setup: Could not setup stage 3 of imaging pipeline.");
 		}
 		
 		// Assign this FBO for left-eye and right-eye channel: The FBO is shared accross channels...
@@ -761,7 +769,7 @@ void PsychInitializeImagingPipeline(PsychWindowRecordType *windowRecord, int ima
 			// We need a new, private bounce-buffer:
 			if (!PsychCreateFBO(&(windowRecord->fboTable[fbocount]), fboInternalFormat, FALSE, winwidth, winheight, 0)) {
 				// Failed!
-				PsychErrorExitMsg(PsychError_internal, "Imaging Pipeline setup: Could not setup stage 3 of imaging pipeline [1st bounce buffer].");
+				PsychErrorExitMsg(PsychError_system, "Imaging Pipeline setup: Could not setup stage 3 of imaging pipeline [1st bounce buffer].");
 			}
 			
 			windowRecord->preConversionFBO[2] = fbocount;
@@ -771,7 +779,7 @@ void PsychInitializeImagingPipeline(PsychWindowRecordType *windowRecord, int ima
 		// In any case, we need a new private 2nd bounce buffer for the special case of the final processing chain:
 		if (!PsychCreateFBO(&(windowRecord->fboTable[fbocount]), fboInternalFormat, FALSE, winwidth, winheight, 0)) {
 			// Failed!
-			PsychErrorExitMsg(PsychError_internal, "Imaging Pipeline setup: Could not setup stage 3 of imaging pipeline [2nd bounce buffer].");
+			PsychErrorExitMsg(PsychError_system, "Imaging Pipeline setup: Could not setup stage 3 of imaging pipeline [2nd bounce buffer].");
 		}
 		
 		windowRecord->preConversionFBO[3] = fbocount;
@@ -1002,7 +1010,7 @@ void PsychInitializeImagingPipeline(PsychWindowRecordType *windowRecord, int ima
 	// engine, so the next drawing command will trigger binding the proper FBO of our pipeline.
 	// Before this point (==OpenWindow time), all drawing was directly directed to the system
 	// framebuffer - important for all the timing tests and calibrations to work correctly.
-	PsychSetDrawingTarget(0x1);
+	PsychSetDrawingTarget((PsychWindowRecordType*) 0x1);
 
 	// Well done.
 	return;
@@ -1186,7 +1194,7 @@ psych_bool PsychCreateFBO(PsychFBO** fbo, GLenum fboInternalFormat, psych_bool n
 		
 		if (glGetError()!=GL_NO_ERROR) {
 			printf("PTB-ERROR: Failed to setup internal framebuffer objects color buffer attachment for imaging pipeline!\n");
-			printf("PTB-ERROR: Most likely the requested size & depth of the window or texture is not supported by your graphics hardware.\n");
+			printf("PTB-ERROR: Most likely the requested size or colordepth of the window or texture is not supported by your graphics hardware.\n");
 			return(FALSE);
 		}
 		
@@ -1645,7 +1653,7 @@ void PsychCreateShadowFBOForTexture(PsychWindowRecordType *textureRecord, psych_
 		
 		if (textureRecord->textureNumber > 0) {
 			// Allocate and assign FBO object info structure PsychFBO:
-			PsychCreateFBO(&(textureRecord->fboTable[0]), (GLenum) 0, (PsychPrefStateGet_3DGfx() > 0) ? TRUE : FALSE, PsychGetWidthFromRect(textureRecord->rect), PsychGetHeightFromRect(textureRecord->rect), 0);
+			PsychCreateFBO(&(textureRecord->fboTable[0]), (GLenum) 0, (PsychPrefStateGet_3DGfx() > 0) ? TRUE : FALSE, (int) PsychGetWidthFromRect(textureRecord->rect), (int) PsychGetHeightFromRect(textureRecord->rect), 0);
 			
 			// Manually set up the color attachment texture id to our texture id:
 			textureRecord->fboTable[0]->coltexid = textureRecord->textureNumber;
@@ -1665,7 +1673,7 @@ void PsychCreateShadowFBOForTexture(PsychWindowRecordType *textureRecord, psych_
 			// Need 32 bpc floating point precision?
 			if (forImagingmode & kPsychNeed32BPCFloat) { fboInternalFormat = GL_RGBA_FLOAT32_APPLE; textureRecord->bpc = 32; }
 			
-			PsychCreateFBO(&(textureRecord->fboTable[0]), fboInternalFormat, (PsychPrefStateGet_3DGfx() > 0) ? TRUE : FALSE, PsychGetWidthFromRect(textureRecord->rect), PsychGetHeightFromRect(textureRecord->rect), 0);
+			PsychCreateFBO(&(textureRecord->fboTable[0]), fboInternalFormat, (PsychPrefStateGet_3DGfx() > 0) ? TRUE : FALSE, (int) PsychGetWidthFromRect(textureRecord->rect), (int) PsychGetHeightFromRect(textureRecord->rect), 0);
 			
 			// Manually set up the texture id from our color attachment texture id:
 			textureRecord->textureNumber = textureRecord->fboTable[0]->coltexid;
@@ -1680,7 +1688,7 @@ void PsychCreateShadowFBOForTexture(PsychWindowRecordType *textureRecord, psych_
 	if (asRendertarget && textureRecord->fboTable[0]->fboid==0) {
 		// Initialize and setup real FBO object (optionally with z- and stencilbuffer) and attach the texture
 		// as color attachment 0, aka main colorbuffer:				
-		if (!PsychCreateFBO(&(textureRecord->fboTable[0]), (GLenum) 1, (PsychPrefStateGet_3DGfx() > 0) ? TRUE : FALSE, PsychGetWidthFromRect(textureRecord->rect), PsychGetHeightFromRect(textureRecord->rect), 0)) {
+		if (!PsychCreateFBO(&(textureRecord->fboTable[0]), (GLenum) 1, (PsychPrefStateGet_3DGfx() > 0) ? TRUE : FALSE, (int) PsychGetWidthFromRect(textureRecord->rect), (int) PsychGetHeightFromRect(textureRecord->rect), 0)) {
 			// Failed!
 			PsychErrorExitMsg(PsychError_internal, "Preparation of drawing into an offscreen window or texture failed when trying to create associated framebuffer object!");
 			
@@ -1726,7 +1734,7 @@ void PsychNormalizeTextureOrientation(PsychWindowRecordType *sourceRecord)
 		if (PsychPrefStateGet_Verbosity()>5) printf("PTB-DEBUG: In PsychNormalizeTextureOrientation(): Performing GPU renderswap for source gl-texture %i --> ", sourceRecord->textureNumber);
 		
 		// Soft-reset drawing engine in a safe way:
-		PsychSetDrawingTarget(0x1);
+		PsychSetDrawingTarget((PsychWindowRecordType*) 0x1);
 
 		// Normalization needed. Create a suitable FBO as rendertarget:
 		needzbuffer = FALSE;
@@ -3466,8 +3474,8 @@ psych_bool PsychPipelineBuiltinRenderStereoSyncLine(PsychWindowRecordType *windo
 	char* strp;
 	float blackpoint, r, g, b;
 	float fraction = 0.25;
-	float w = PsychGetWidthFromRect(windowRecord->rect);
-	float h = PsychGetHeightFromRect(windowRecord->rect);
+	float w = (float) PsychGetWidthFromRect(windowRecord->rect);
+	float h = (float) PsychGetHeightFromRect(windowRecord->rect);
 	r=g=b=1.0;
 	
 	// We default to display height minus 1 for position of sync-line, instead of the lower most row
@@ -3503,7 +3511,7 @@ psych_bool PsychPipelineBuiltinRenderStereoSyncLine(PsychWindowRecordType *windo
 	}
 	
 	// Query current target buffer:
-	glGetIntegerv(GL_DRAW_BUFFER, &draw_buffer);
+	glGetIntegerv(GL_DRAW_BUFFER, (GLint*) &draw_buffer);
 	
 	if (draw_buffer == GL_BACK_LEFT || draw_buffer == GL_FRONT_LEFT) {
 		// Left stereo buffer:

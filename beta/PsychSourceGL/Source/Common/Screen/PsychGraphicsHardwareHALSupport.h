@@ -61,6 +61,27 @@ void		PsychStoreGPUSurfaceAddresses(PsychWindowRecordType* windowRecord);
 
 // Wait until a bufferswap is complete or bufferswap at next retrace is certain:
 psych_bool		PsychWaitForBufferswapPendingOrFinished(PsychWindowRecordType* windowRecord, double* timestamp, int *beamposition);
+unsigned int	PsychGetNVidiaGPUType(PsychWindowRecordType* windowRecord);
+
+// Map PTB screenId to GPU headId (aka pipeId):
+int			PsychScreenToHead(int screenId);
+// Change mapping of a PTB screenId to GPU headId:
+void		PsychSetScreenToHead(int screenId, int headId);
+// Setup initial mapping for 'numDisplays' displays:
+void		PsychInitScreenToHeadMappings(int numDisplays);
+
+// Get/Set corrective offsets for scanout position queries on certain GPU's:
+void		PsychGetBeamposCorrection(int screenId, int *vblbias, int *vbltotal);
+void		PsychSetBeamposCorrection(int screenId, int vblbias, int vbltotal);
+
+// Control bit depth control and dithering on digital display output encoder:
+psych_bool  PsychSetOutputDithering(PsychWindowRecordType* windowRecord, int screenId, unsigned int ditherEnable);
+
+// Control identity passthrough of framebuffer 8 bpc pixel values to encoders/connectors:
+unsigned int PsychSetGPUIdentityPassthrough(PsychWindowRecordType* windowRecord, int screenId, psych_bool passthroughEnable);
+
+// Try to auto-detect screen to head mappings if possible and not yet overriden by usercode:
+void PsychAutoDetectScreenToHeadMappings(int maxHeads);
 
 // End of routines.
 

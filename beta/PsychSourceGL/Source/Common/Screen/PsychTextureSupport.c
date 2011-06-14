@@ -66,7 +66,7 @@ static GLenum  texturetarget = 0;
 
 // A rough guess of how much memory is currently consumed by textures... Can be grossly wrong,
 // only used if texture creation failed and out-of-memory is a likely suspect.
-static unsigned int texmemguesstimate = 0;
+static size_t texmemguesstimate = 0;
 
 void PsychDetectTextureTarget(PsychWindowRecordType *win)
 {
@@ -75,13 +75,13 @@ void PsychDetectTextureTarget(PsychWindowRecordType *win)
         // Yes. Need to auto-detect texturetarget to use. This routine is called with
 		// the OpenGL context for the 'win' already attached, from PsychOpenOnscreenWindow().
 
-        if ((strstr(glGetString(GL_EXTENSIONS), "GL_EXT_texture_rectangle") || strstr(glGetString(GL_EXTENSIONS), "GL_ARB_texture_rectangle")) && GL_TEXTURE_RECTANGLE_EXT != GL_TEXTURE_2D) {
+        if ((strstr((char*) glGetString(GL_EXTENSIONS), "GL_EXT_texture_rectangle") || strstr((char*) glGetString(GL_EXTENSIONS), "GL_ARB_texture_rectangle")) && GL_TEXTURE_RECTANGLE_EXT != GL_TEXTURE_2D) {
 	    // Great! GL_TEXTURE_RECTANGLE_EXT is available! Use it.
 	    texturetarget = GL_TEXTURE_RECTANGLE_EXT;
 	    if(PsychPrefStateGet_Verbosity()>2)
 			printf("PTB-INFO: Using OpenGL GL_TEXTURE_RECTANGLE_EXT extension for efficient high-performance texture mapping...\n");
         }
-        else if (strstr(glGetString(GL_EXTENSIONS), "GL_NV_texture_rectangle") && GL_TEXTURE_RECTANGLE_NV != GL_TEXTURE_2D){
+        else if (strstr((char*) glGetString(GL_EXTENSIONS), "GL_NV_texture_rectangle") && GL_TEXTURE_RECTANGLE_NV != GL_TEXTURE_2D){
 	    // Try NVidia specific texture rectangle extension:
 	    texturetarget = GL_TEXTURE_RECTANGLE_NV;
 	    if(PsychPrefStateGet_Verbosity()>2)
@@ -225,7 +225,7 @@ void PsychCreateTexture(PsychWindowRecordType *win)
 	GLenum                          texturetarget, oldtexturetarget;
 	GLenum							textureHint;
 	double							sourceWidth, sourceHeight;
-	GLint                           glinternalFormat, gl_realinternalformat = 0;
+	GLint                           glinternalFormat = 0, gl_realinternalformat = 0;
 	static GLint                    gl_lastrequestedinternalFormat = 0;
 	GLint							gl_rbits=0, gl_gbits=0, gl_bbits=0, gl_abits=0, gl_lbits=0;
 	long							screenWidth, screenHeight;
@@ -441,8 +441,11 @@ void PsychCreateTexture(PsychWindowRecordType *win)
 				glGetTexLevelParameteriv(texturetarget, 0, GL_TEXTURE_GREEN_SIZE, &gl_gbits);                
 				glGetTexLevelParameteriv(texturetarget, 0, GL_TEXTURE_BLUE_SIZE, &gl_bbits);                
 				glGetTexLevelParameteriv(texturetarget, 0, GL_TEXTURE_ALPHA_SIZE, &gl_abits);                
-				glGetTexLevelParameteriv(texturetarget, 0, GL_TEXTURE_LUMINANCE_SIZE, &gl_lbits);                
-				
+				glGetTexLevelParameteriv(texturetarget, 0, GL_TEXTURE_LUMINANCE_SIZE, &gl_lbits);
+
+				// Special override for YCBCR textures which return all component bits as zero:
+				if (glinternalFormat == GL_YCBCR_MESA || glinternalFormat == GL_YCBCR_422_APPLE) gl_rbits = 8;
+
 				// Store override per-component bit-depths:
 				win->bpc = (int) ((gl_rbits > gl_lbits) ? gl_rbits : gl_lbits); 
 			}
@@ -457,7 +460,7 @@ void PsychCreateTexture(PsychWindowRecordType *win)
 			// Sanity check: A sum of zero over all texture channels would indicate that texture
 			// creation failed, most likely due to an out of memory condition in the graphics
 			// hardwares VRAM:
-			if ((!avoidCPUGPUSync || (verbosity > 10)) && ((gl_rbits + gl_gbits + gl_bbits + gl_abits + gl_lbits == 0) || (glerr = glGetError())!=0)) {
+			if ((!avoidCPUGPUSync || (verbosity > 10)) && (((glerr = glGetError())!=0) || (gl_rbits + gl_gbits + gl_bbits + gl_abits + gl_lbits == 0))) {
 				// Texture creation failed or malfunctioned!
 				if (PsychPrefStateGet_Verbosity() > 0) {
 					// Abort with error:
@@ -491,7 +494,7 @@ void PsychCreateTexture(PsychWindowRecordType *win)
 							printf("PTB-ERROR: Your image or texture exceeds the maximum width and/or height of %i texels supported by your graphics hardware.\n", gl_rbits);
 							printf("PTB-ERROR: You'll have to either reduce the size of your images below that limit, or upgrade your hardware.\n\n");
 						}
-						else {
+						else {							
 							// Either out-of-memory in VRAM for such large textures, or unsupported format/precision:
 							if (glinternalFormat!=GL_LUMINANCE8 && glinternalFormat!=GL_RGBA8 && !glewIsSupported("GL_APPLE_float_pixels") && !glewIsSupported("GL_ATI_texture_float") && !glewIsSupported("GL_ARB_texture_float")) {
 								// Requested format is not one of the 8bpc fixed-point LDR formats, but a HDR format which
@@ -541,6 +544,13 @@ void PsychCreateTexture(PsychWindowRecordType *win)
 						PsychErrorExitMsg(PsychError_user, "Texture creation failed, most likely due to unsupported precision or insufficient free memory.");
 					}
 					else {
+						if ((glerr == GL_INVALID_ENUM) && (glinternalFormat == GL_YCBCR_MESA || glinternalFormat == GL_YCBCR_422_APPLE)) {
+							printf("PTB-ERROR: Tried to use a memory-optimized YCBYCR texture, but your GPU + graphics driver doesn't support this.\n");
+							printf("PTB-ERROR: You'll need to update your graphics driver and/or upgrade your graphics card, or change your script code\n");
+							printf("PTB-ERROR: to avoid this special unsupported texture format.\n");
+							PsychErrorExitMsg(PsychError_user, "Texture creation failed, most likely due to use of an unsupported texture format.");
+						}
+						
 						// Some other error:
 						printf("\n\nPTB-ERROR: Texture creation failed! OpenGL reported the following error condition: %s.\n", gluErrorString(glerr));
 						PsychErrorExitMsg(PsychError_user, "Texture creation failed for unknown reason. You may want to contact the Psychtoolbox forum for help.");
@@ -550,7 +560,7 @@ void PsychCreateTexture(PsychWindowRecordType *win)
 		}  // End of dual-pass texture creation (check + create).
 		
 		// Accounting... ...this is only a rough guesstimate:
-		win->surfaceSizeBytes = ((glinternalFormat==GL_RGBA8) ? 4 : win->depth / 8) * twidth * theight;
+		win->surfaceSizeBytes = ((size_t) ((glinternalFormat==GL_RGBA8) ? 4 : win->depth / 8)) * (size_t) twidth * (size_t) theight;
 		texmemguesstimate+= win->surfaceSizeBytes;
 				
 	}  // End of new texture creation.
@@ -589,7 +599,7 @@ void PsychCreateTexture(PsychWindowRecordType *win)
 	}
 
 	// New internal format requested?
-	if ((!avoidCPUGPUSync || (verbosity > 10)) && (gl_lastrequestedinternalFormat != glinternalFormat && !recycle)) {
+	if ((!avoidCPUGPUSync || (verbosity > 10)) && (!recycle && (gl_lastrequestedinternalFormat != glinternalFormat))) {
 		// Seems so...
 		gl_lastrequestedinternalFormat = glinternalFormat;
 		

@@ -26,6 +26,8 @@
 
 #include "Screen.h"
 
+#include "PsychGraphicsCardRegisterSpecs.h"
+
 #if PSYCH_SYSTEM == PSYCH_OSX
 #include <IOKit/IOKitLib.h>
 #include <sys/time.h>
@@ -40,8 +42,8 @@ PsychError SCREENNull(void)
 {
 #define RADEON_D1CRTC_INTERRUPT_CONTROL 0x60DC
 
-#define RADEON_R500_GEN_INT_CNTL   0x100
-#define RADEON_R500_GEN_INT_STATUS 0x104
+//#define RADEON_R500_GEN_INT_CNTL   0x100
+//#define RADEON_R500_GEN_INT_STATUS 0x104
 //#define RADEON_R500_GEN_INT_CNTL   0x040
 //#define RADEON_R500_GEN_INT_STATUS 0x044
 //#define RADEON_R500_GEN_INT_CNTL   0x200
@@ -61,8 +63,44 @@ PsychError SCREENNull(void)
 	PsychPushHelp(useString, synopsisString, seeAlsoString);
 	if(PsychIsGiveHelp()){PsychGiveHelp();return(PsychError_none);};
 
+    #if PSYCH_SYSTEM != PSYCH_WINDOWS
+        // Test GPU low-level dithering control:
+        int screenId, ditherEnable;
+		PsychCopyInIntegerArg(1, TRUE, &screenId);
+		PsychCopyInIntegerArg(2, TRUE, &ditherEnable);
+
+		if (PsychPrefStateGet_Verbosity() > 2) printf("SetDithering: ScreenId %i : DitherSetting %i.\n", screenId, ditherEnable);
+        PsychSetOutputDithering(NULL, screenId, (unsigned int) ditherEnable);
+
+
+        unsigned int crtcoff[6] = { EVERGREEN_CRTC0_REGISTER_OFFSET, EVERGREEN_CRTC1_REGISTER_OFFSET, EVERGREEN_CRTC2_REGISTER_OFFSET, EVERGREEN_CRTC3_REGISTER_OFFSET, EVERGREEN_CRTC4_REGISTER_OFFSET, EVERGREEN_CRTC5_REGISTER_OFFSET };
+
+//        printf("Pre:  AVIVO_DC_LUTA_BLACK_OFFSET_BLUE = %i\n", PsychOSKDReadRegister(screenId, AVIVO_DC_LUTA_BLACK_OFFSET_BLUE, NULL));
+/*
+        PsychOSKDWriteRegister(screenId, AVIVO_DC_LUTA_BLACK_OFFSET_BLUE + 0x0000, 0, NULL);
+        PsychOSKDWriteRegister(screenId, AVIVO_DC_LUTA_BLACK_OFFSET_GREEN + 0x0000, 0, NULL);
+        PsychOSKDWriteRegister(screenId, AVIVO_DC_LUTA_BLACK_OFFSET_RED + 0x0000, 0, NULL);
+
+        PsychOSKDWriteRegister(screenId, AVIVO_DC_LUTA_WHITE_OFFSET_BLUE + 0x0000, 0xffff, NULL);
+        PsychOSKDWriteRegister(screenId, AVIVO_DC_LUTA_WHITE_OFFSET_GREEN + 0x0000, 0xffff, NULL);
+        PsychOSKDWriteRegister(screenId, AVIVO_DC_LUTA_WHITE_OFFSET_RED + 0x0000, 0xffff, NULL);
+
+        PsychOSKDWriteRegister(screenId, AVIVO_DC_LUT_RW_INDEX, 0, NULL);        
+        for (i=0; i < 256; i++) {
+            m = i << 1;
+            PsychOSKDWriteRegister(screenId, AVIVO_DC_LUT_30_COLOR, (m << 20) | (m << 10) | (m << 0), NULL);
+        }
+*/        
+//        printf("Post: AVIVO_DC_LUTA_BLACK_OFFSET_BLUE = %i\n", PsychOSKDReadRegister(screenId, AVIVO_DC_LUTA_BLACK_OFFSET_BLUE, NULL));
+
+        for (i=0; i < 6; i++) printf("EVERGREEN_DC_LUT_BLACK_OFFSET_BLUE[%i] = %i\n", i, PsychOSKDReadRegister(screenId, EVERGREEN_DC_LUT_BLACK_OFFSET_BLUE + crtcoff[i], NULL));
+
+        
+        return(PsychError_none);
+    #endif
+
 	#if PSYCH_SYSTEM == PSYCH_LINUX
-		PsychAllocInWindowRecordArg(1, TRUE, &windowRecord);
+/*		PsychAllocInWindowRecordArg(1, TRUE, &windowRecord);
 
 		// Return current OpenML kPsychOpenMLDefective state:
 		PsychCopyOutDoubleArg(1, FALSE, (int) (windowRecord->specialflags & kPsychOpenMLDefective));
@@ -76,6 +114,20 @@ PsychError SCREENNull(void)
 		if (PsychCopyInIntegerArg(3, FALSE, &i)) {
 			windowRecord->specialflags = i;
 		}
+*/
+
+		unsigned int regOffset, value, hi, lo;
+		PsychCopyInIntegerArg(1, TRUE, &regOffset);
+		value = PsychOSKDReadRegister(0, regOffset, NULL);
+
+		hi = value >> 16;
+		lo = value & 0xffff;
+
+		if (PsychPrefStateGet_Verbosity() > 2) printf("%p :: hi = %i , lo = %i , val = %i\n", (void*) regOffset, hi, lo, value);
+
+		PsychCopyOutDoubleArg(1, FALSE, (double) value);
+		PsychCopyOutDoubleArg(2, FALSE, (double) hi);
+		PsychCopyOutDoubleArg(3, FALSE, (double) lo);
 
 		return(PsychError_none);
 	#endif
@@ -108,12 +160,100 @@ PsychError SCREENNull(void)
 	int vbl_start, vbl_end, vbl, htotal, vtotal, dotclock;
 	psych_int64 linedur_ns, pixeldur_ns;
 	psych_bool invbl = TRUE;
-	int scanline, scanpixel;
+	int scanline, scanpixel, vblcount;
+	unsigned int cardId;
 	
 	psych_uint32 crtco = (crtcid > 0) ? RADEON_D2CRTC_OFFSET : 0;
 	struct timeval raw_time;
 	struct timeval delta_time;	
 	struct timeval vblank_time;
+
+	// NVidia GPU? Check OpenGL vendor string and for recognized gpu-id:
+	if ((strstr((char*) glGetString(GL_VENDOR), "NVIDIA")) && (PsychGetNVidiaGPUType(NULL) > 0)) {
+		// Yes. Test beampos queries and vblank counter:
+		if ((cardId = PsychGetNVidiaGPUType(NULL)) >= 0x50) {
+			// NV50 or later, aka GeForce-8000 or later: Same registers for
+			// everything shipping from NV50 up to at least NVC0 "Fermi":
+			
+			// Offset between crtc's is 0x800:
+			crtco = (crtcid > 0) ? 0x800 : 0;
+			
+			// Lower 16 bits are horizontal scanout position, upper 16 bits are always zero:
+			scanpixel = (PsychOSKDReadRegister(crtcid, 0x616344 + crtco, NULL)) & 0xFFFF;
+
+			// Lower 16 bits are vertical scanout position (scanline), upper 16 bits are vblank counter:
+			vblcount = (PsychOSKDReadRegister(crtcid, 0x616340 + crtco, NULL));
+			scanline = vblcount & 0xFFFF;
+
+			vblcount = (vblcount >> 16) & 0xFFFF;
+
+			if (verbose > 1 || verbose < 0) {
+//				printf("%i\n", (PsychOSKDReadRegister(crtcid, 0x616340 + crtco + 4 * verbose, NULL)));
+				int i;
+				
+				// crtc stride for CRTC control block (CRTC_VAL at offset 0xa00, stride 0x540)
+				crtco = (crtcid > 0) ? 0x540 : 0;
+
+//				for (i=0; i<=0xfffffc; i+=4) {
+				for (i=0; i<0x540; i+=4) {
+//					unsigned int base = 0x610000; // Display on NV50
+//no					unsigned int base = 0x600000;
+//					unsigned int base = 0x00008000;
+					//crtco = 0x540;
+					unsigned int base = 0x610000 + 0xa00 + crtco;
+					vblcount = PsychOSKDReadRegister(crtcid, base + i, NULL);
+					unsigned int hi = vblcount >> 16;
+					unsigned int lo = vblcount & 0xffff;
+//					if ((vblcount > 0 && vblcount < 50) || (hi > 0 && hi < 50) || (hi> 750 && hi < 850) || (lo > 0 && lo < 50) || (lo> 750 && lo < 850)) {
+//					if (abs((int)(hi + lo) - 38) < 5) {
+if (1) {
+						printf("%p :: hi = %i , lo = %i , val = %i\n", (void*) (base + i), hi, lo, vblcount);
+					}
+				}
+//				printf("%i\n", (PsychOSKDReadRegister(crtcid, 0x0068080c + crtco, NULL)));
+			}
+			// SYNC_START_TO_BLANK_END high-word in CRTC_VAL block of NV50_PDISPLAY on NV-50 encodes
+			// length of interval from vsync start line to vblank end line, the corrective offset we
+			// need to subtract from scanline position. Scanline position measures positive distance from
+			// vsync start line (== scanline 0).
+			// To low-word likely encodes hsyncstart to hblank end length.
+			int vbloffset = (PsychOSKDReadRegister(crtcid, 0x610000 + 0xa00 + 0xe8 + ((crtcid > 0) ? 0x540 : 0), NULL) >> 16) & 0xFFFF;
+			// DISPLAY_TOTAL: Encodes VTOTAL in high-word, HTOTAL in low-word:
+			int vtotal = (PsychOSKDReadRegister(crtcid, 0x610000 + 0xa00 + 0xf8 + ((crtcid > 0) ? 0x540 : 0), NULL) >> 16) & 0xFFFF;
+			printf("head %i: vbloffset = %i : vtotal = %i\n", crtcid, vbloffset, vtotal);
+			
+		}
+		else {
+			// NV40 or earlier, aka GeForce-7000 or earlier: Same registers down to
+			// earliest NVidia cards NV04 aka RivaTNT-1:
+
+			// Offset between crtc's is 0x2000:
+			crtco = (crtcid > 0) ? 0x2000 : 0;
+
+			// Lower 12 bits are vertical scanout position, bit 16 is known to
+			// indicate "in vblank" status. All other bits are always zero:
+			vblcount = (PsychOSKDReadRegister(crtcid, 0x600808 + crtco, NULL));
+			scanline = vblcount & 0xFFF;
+
+			// Bit 4 after right-shift should indicate "in vblank", other bits
+			// are always zero:
+			vblcount = vblcount >> 12;
+
+			// No support for readout of horizontal scanout position so far:
+			scanpixel = 0;
+                }
+
+		if (verbose == 1) printf("NV-%x : CRTC %i : scanout x,y = %i , %i   -- vblCount %i\n", cardId, crtcid, scanpixel, scanline, vblcount);
+
+		PsychCopyOutDoubleArg(1, FALSE, (double) scanpixel);
+		PsychCopyOutDoubleArg(2, FALSE, (double) scanline);
+		PsychCopyOutDoubleArg(3, FALSE, (double) vblcount);
+	
+		// Done with NVidia GPU test:
+		return(PsychError_none);
+	}
+
+	// Must be a non-NVidia, hopefully an ATI/AMD piece, otherwise we die:
 
 	// Get basis parameters:
 	vbl = PsychOSKDReadRegister(crtcid, AVIVO_D1CRTC_V_BLANK_START_END + crtco, NULL);
@@ -222,7 +362,7 @@ PsychError SCREENNull(void)
 		if (myprop == NULL) PsychErrorExitMsg(PsychError_system, "PTB-DEBUG: FAILED TO FIND AAPL00,Dither key!!\n");
 		m = CFDataGetLength(myprop);
 		printf("Amount of data stored in key 'AAPL00,Dither' is %i bytes.\nData: ", m);
-		psych_uint8* mypropdata = CFDataGetMutableBytePtr(myprop);
+		psych_uint8* mypropdata = CFDataGetMutableBytePtr((CFMutableDataRef) myprop);
 		if (mypropdata == NULL) PsychErrorExitMsg(PsychError_system, "PTB-DEBUG: FAILED TO GET MUTABLE DATA PTR OF AAPL00,Dither key!!\n");
 		for (i=0; i < m; i++) printf("%x ", mypropdata[i]);
 		

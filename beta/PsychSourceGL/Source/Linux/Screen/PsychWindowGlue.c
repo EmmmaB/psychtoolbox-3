@@ -538,7 +538,7 @@ psych_bool PsychOSOpenOnscreenWindow(PsychScreenSettingsType *screenSettings, Ps
 	// that actually uses the setup call -- no special cases or extra code needed there :-)
 	// This special glXSwapIntervalSGI() call will simply accept an input value of zero for
 	// disabling vsync'ed bufferswaps as a valid input parameter:
-	glXSwapIntervalSGI = glXGetProcAddressARB("glXSwapIntervalMESA");
+	glXSwapIntervalSGI = (PFNGLXSWAPINTERVALSGIPROC) glXGetProcAddressARB("glXSwapIntervalMESA");
 	
 	// Additionally bind the Mesa query call:
 	glXGetSwapIntervalMESA = (PFNGLXGETSWAPINTERVALMESAPROC) glXGetProcAddressARB("glXGetSwapIntervalMESA");
@@ -554,7 +554,7 @@ psych_bool PsychOSOpenOnscreenWindow(PsychScreenSettingsType *screenSettings, Ps
   // bind the extension. If this special case is present, we do it here manually ourselves:
   if ( (glXSwapIntervalSGI == NULL) && (strstr(glGetString(GL_EXTENSIONS), "WGL_EXT_swap_control") != NULL) ) {
 	// Looks so: Bind manually...
-	glXSwapIntervalSGI = glXGetProcAddressARB("glXSwapIntervalSGI");
+	glXSwapIntervalSGI = (PFNGLXSWAPINTERVALSGIPROC) glXGetProcAddressARB("glXSwapIntervalSGI");
   }
 
   // Extension finally supported?
@@ -569,16 +569,10 @@ psych_bool PsychOSOpenOnscreenWindow(PsychScreenSettingsType *screenSettings, Ps
   }
   fflush(NULL);
 
-  // ATI Radeon X1000 or later AND first opened onscreen window?
-  if ((x11_windowcount == 1) && ( (strstr(glGetString(GL_VENDOR), "ATI") && (strstr(glGetString(GL_RENDERER), "Radeon") || strstr(glGetString(GL_RENDERER), "Fire"))) || (strstr(glGetString(GL_VENDOR), "DRI R")) || (strstr(glGetString(GL_VENDOR), "Advanced Micro Devices") && strstr(glGetString(GL_RENDERER), "Mesa DRI R")) )) {
-	  if (strstr(glGetString(GL_RENDERER), "X") || strstr(glGetString(GL_RENDERER), "HD") || strstr(glGetString(GL_RENDERER), "Mesa DRI")) {
-	  	// Probably an X1000 or later or an HD 2000/3000/later series chip.
-		// Try to map its PCI register space to allow for our implementation of
-		// beamposition queries:
-		if (PsychScreenMapRadeonCntlMemory()) printf("PTB-INFO: ATI-Radeon of model series X1000, HD2000, HD3000 or later detected -- Beamposition queries enabled.\n");
-	  }
-  }
-  
+  // First opened onscreen window? If so, we try to map GPU MMIO registers
+  // to enable beamposition based timestamping and other special goodies:
+  if (x11_windowcount == 1) PsychScreenMapRadeonCntlMemory();
+
   // Ok, we should be ready for OS independent setup...
   fflush(NULL);
 
@@ -597,6 +591,9 @@ psych_bool PsychOSOpenOnscreenWindow(PsychScreenSettingsType *screenSettings, Ps
 */
   // Wait for X-Server to settle...
   XSync(dpy, 1);
+
+  // Wait 250 msecs extra to give desktop compositor a chance to settle:
+  PsychYieldIntervalSeconds(0.25);
 
   // Well Done!
   return(TRUE);
@@ -617,10 +614,46 @@ psych_bool PsychOSOpenOffscreenWindow(double *rect, int depth, PsychWindowRecord
   return(FALSE);
 }
 
+/*
+    PsychOSGetPostSwapSBC() -- Internal method for now, used in close window path.
+ */
+static psych_int64 PsychOSGetPostSwapSBC(PsychWindowRecordType *windowRecord)
+{
+	psych_int64 ust, msc, sbc;
+	sbc = 0;
+
+	#ifdef GLX_OML_sync_control
+	// Extension unsupported or known to be defective? Return "damage neutral" 0 in that case:
+	if ((NULL == glXWaitForSbcOML) || (windowRecord->specialflags & kPsychOpenMLDefective)) return(0);
+
+	// Extension supported: Perform query and error check.
+	if (!glXWaitForSbcOML(windowRecord->targetSpecific.deviceContext, windowRecord->targetSpecific.windowHandle, 0, &ust, &msc, &sbc)) {
+		// Failed! Return a "damage neutral" result:
+		return(0);
+	}
+	#endif
+	return(sbc);
+}
 
 void PsychOSCloseWindow(PsychWindowRecordType *windowRecord)
 {
   Display* dpy = windowRecord->targetSpecific.deviceContext;
+
+  // Check if we are trying to close the window after it had an "odd" (== non-even)
+  // number of bufferswaps. If so, we execute one last bufferswap to make the count
+  // even. This means that if this window was swapped via page-flipping, the system
+  // should end with the same backbuffer-frontbuffer assignment as the one prior
+  // to opening the window. This may help sidestep certain bugs in compositing desktop
+  // managers (e.g., Compiz).
+  if (PsychOSGetPostSwapSBC(windowRecord) % 2) {
+	// Uneven count. Submit a swapbuffers request and wait for it to truly finish:
+	PsychOSFlipWindowBuffers(windowRecord);
+	PsychOSGetPostSwapSBC(windowRecord);
+  }
+
+  if (PsychPrefStateGet_Verbosity() > 5) {
+	printf("PTB-DEBUG:PsychOSCloseWindow: Closing with a final swapbuffers count of %i.\n", (int) PsychOSGetPostSwapSBC(windowRecord));
+  }
 
   // Detach OpenGL rendering context again - just to be safe!
   glXMakeCurrent(windowRecord->targetSpecific.deviceContext, None, NULL);
@@ -759,8 +792,22 @@ psych_int64 PsychOSGetSwapCompletionTimestamp(PsychWindowRecordType *windowRecor
 	if (PsychPrefStateGet_Verbosity() > 11) printf("PTB-DEBUG:PsychOSGetSwapCompletionTimestamp: Supported. Calling with targetSBC = %lld.\n", targetSBC);
 
 	// Extension supported: Perform query and error check.
-	if (!glXWaitForSbcOML(windowRecord->targetSpecific.deviceContext, windowRecord->targetSpecific.windowHandle, targetSBC, &ust, &msc, &sbc)) return(-2);
-
+	if (!glXWaitForSbcOML(windowRecord->targetSpecific.deviceContext, windowRecord->targetSpecific.windowHandle, targetSBC, &ust, &msc, &sbc)) {
+		// OpenML supposed to be supported and in good working order according to startup check?
+		if (windowRecord->gfxcaps & kPsychGfxCapSupportsOpenML) {
+			// Yes. Then this is a new failure condition and we report it as such:
+			if (PsychPrefStateGet_Verbosity() > 11) {
+				printf("PTB-DEBUG:PsychOSGetSwapCompletionTimestamp: glXWaitForSbcOML() failed! Failing with rc = -2.\n");
+			}
+			return(-2);
+		}
+		
+		// No. Failing this call is kind'a expected, so we don't make a big fuss on each
+		// failure but return "unsupported" rc, so calling code can try fallback-path without
+		// making much noise:
+		return(-1);
+	}
+	
 	// Check for valid return values:
 	if (ust == 0 || msc == 0) {
 		// Ohoh:

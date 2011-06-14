@@ -33,10 +33,10 @@ function densities = PhotopigmentAxialDensity(receptorTypes,species,source)
 % 7/11/03  dhb  Wrote it.
 
 % Fill in defaults
-if (nargin < 2 | isempty(species))
+if (nargin < 2 || isempty(species))
 	species = 'Human';
 end
-if (nargin < 3 | isempty(source))
+if (nargin < 3 || isempty(source))
 	source = 'Rodieck';
 end
 
@@ -84,7 +84,7 @@ for i = 1:length(densities)
 							densities(i) = 0.50;
 						case 'FovealSCone'
 							densities(i) = 0.40;
-						case {'LCone' 'MCone'}
+						case {'LCone', 'MCone'}
 							densities(i) = 0.38;
 						case {'SCone'}
 							densities(i) = 0.3;

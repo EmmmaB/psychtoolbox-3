@@ -1,7 +1,7 @@
 function [isoPerConeSec,absPerConeSec,photoreceptors] = ...
-	RetIrradianceToIsoPerRecSec(irradianceWatts,irradianceS,photoreceptors)
+	RetIrradianceToIsoRecSec(irradianceWatts,irradianceS,photoreceptors)
 % [isoPerConeSec,absPerConeSec,photoreceptors] = ...
-%		RetIrradianceToIsoPerRecSec(irradianceWatts,irradianceS,[photoreceptors])
+%		RetIrradianceToIsoRecSec(irradianceWatts,irradianceS,[photoreceptors])
 %
 % Convert retinal irradiance, measured in watts/um^2-wlinterval to
 % isomerizations per cone per second.
@@ -24,7 +24,7 @@ function [isoPerConeSec,absPerConeSec,photoreceptors] = ...
 %
 % 7/25/03  dhb  Wrote it by pulling in code from elsewhere.
 
-if (nargin < 3 | isempty(photoreceptors))
+if (nargin < 3 || isempty(photoreceptors))
 	photoreceptors = DefaultPhotoreceptors('LivingHumanFovea');
 	photoreceptors = FillInPhotoreceptors(photoreceptors);
 end

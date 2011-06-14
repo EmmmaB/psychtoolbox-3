@@ -42,8 +42,8 @@
 #endif
 
 #if PSYCH_SYSTEM == PSYCH_LINUX
-// Linux: Default capture engine is LibDC1394 V2:
-#define PTB_DEFAULTVIDCAPENGINE 1
+// Linux: Default capture engine is GStreamer (3), used to be LibDC1394 V2 (1):
+#define PTB_DEFAULTVIDCAPENGINE 3
 #define INITIAL_DEFAULT_FONT_NAME		"Times"
 #define INITIAL_DEFAULT_FONT_SIZE		24
 #define INITIAL_DEFAULT_FONT_STYLE		3
@@ -58,8 +58,8 @@
 #endif
 
 #if PSYCH_SYSTEM == PSYCH_WINDOWS
-// MS-Windows: Default capture engine is ARVideo, aka DirectShow:
-#define PTB_DEFAULTVIDCAPENGINE 2
+// MS-Windows: Default capture engine is GStreamer (3):
+#define PTB_DEFAULTVIDCAPENGINE 3
 #define INITIAL_DEFAULT_FONT_NAME		"Courier New"
 #define INITIAL_DEFAULT_FONT_SIZE		18
 #define INITIAL_DEFAULT_FONT_STYLE		1
@@ -465,8 +465,6 @@ void PsychPrefStateSet_DebugMakeTexture(psych_bool setFlag)
 	TimeMakeTextureFlag=setFlag;
 }
 
-
-
 psych_bool PsychPrefStateGet_SuppressAllWarnings(void)
 {
 	return(suppressAllWarnings);
@@ -498,4 +496,18 @@ void PsychPrefStateSet_UseGStreamer(int value)
 int PsychPrefStateGet_UseGStreamer(void)
 {
 	return(useGStreamer);
+}
+
+// Screen -> Head mappings: These are special, because the default
+// mapping gets initialized during display initialization, and
+// the actual mappings are stored in PsychGraphicsHardwareHALSupport.c,
+// so these are just wrappers around the true accessor functions:
+void PsychPrefStateSet_ScreenToHead(int screenId, int headId)
+{
+	PsychSetScreenToHead(screenId, headId);
+}
+
+int PsychPrefStateGet_ScreenToHead(int screenId)
+{
+	return(PsychScreenToHead(screenId));
 }
