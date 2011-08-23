@@ -1,8 +1,6 @@
 function KbQueueCreate(deviceNumber, keyList)
 % KbQueueCreate([deviceNumber, keyList])
 %
-% Requires Mac OS X 10.3 or later
-%
 % The routines KbQueueCreate, KbQueueStart, KbQueueStop, KbQueueCheck
 %  KbQueueWait, KbQueueFlush and KbQueueRelease provide replacments for
 %  KbCheck and KbWait, providing the following advantages:
@@ -136,28 +134,29 @@ function KbQueueCreate(deviceNumber, keyList)
 
 persistent macosxrecent;
 if isempty(macosxrecent)
-   macosxrecent = IsOSX;
-   
-   % Little hack for Octave + OS/X: For some reason the first KbQueueCreate
-   % fails to work properly within PsychHID - something related to Carbon
-   % event queues. Creating and releasing on first invocation makes it work
-   % for the rest of the session...
-   if macosxrecent && IsOctave
-       KbQueueCreate;
-       KbQueueRelease;
-   end
+    if IsWinMatlabR11Style
+        error('Sorry, keyboard queue functions are unsupported on Matlab versions before R2007a');
+    end
+    
+    macosxrecent = IsOSX;
+    LoadPsychHID;
+
+    % Little hack for Octave + OS/X: For some reason the first KbQueueCreate
+    % fails to work properly within PsychHID - something related to Carbon
+    % event queues. Creating and releasing on first invocation makes it work
+    % for the rest of the session...
+    if macosxrecent && IsOctave
+        KbQueueCreate;
+        KbQueueRelease;
+    end
 end
 
-if macosxrecent
-	if nargin == 2
-		PsychHID('KbQueueCreate', deviceNumber, keyList);
-    elseif nargin == 1
-        PsychHID('KbQueueCreate', deviceNumber);
-	elseif nargin == 0
-		PsychHID('KbQueueCreate');
-    elseif nargin > 2
-        error('Too many arguments supplied to KbQueueCreate'); 
-    end
-else
-	error('KbQueueCreate requires Mac OS X 10.3 or later');
+if nargin == 2
+  PsychHID('KbQueueCreate', deviceNumber, keyList);
+elseif nargin == 1
+  PsychHID('KbQueueCreate', deviceNumber);
+elseif nargin == 0
+  PsychHID('KbQueueCreate');
+elseif nargin > 2
+  error('Too many arguments supplied to KbQueueCreate'); 
 end

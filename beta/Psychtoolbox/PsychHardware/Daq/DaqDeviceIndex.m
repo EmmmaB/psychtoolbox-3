@@ -99,6 +99,11 @@ end % if ~nargin || isempty(DeviceName)
 
 NumInterfaces = [];
 
+if IsWinMatlabR11Style
+    error('Sorry, the DAQ toolbox functions are unsupported on Matlab versions before R2007a');
+end
+
+LoadPsychHID;
 devices=PsychHID('Devices');
 daq=[];
 
@@ -128,7 +133,9 @@ for k=1:length(devices)
           if ~isempty(strfind(MatchedDeviceName(l,:),devices(k).product)) & ...
               ~isempty(strfind(MatchedSerialNumbers(l,:),devices(k).serialNumber))
             NumInterfaces(l) = NumInterfaces(l)+1;
-            if devices(k).outputs > NumOutputs
+            % We want interface #0. We get it by asking for it on Linux,
+            % and indirectly detecting it by the number of outputs on OS/X:
+            if (devices(k).outputs > NumOutputs) || (devices(k).interfaceID == 0)
               daq(end+1) = k;
             end
           else
@@ -166,7 +173,9 @@ for k=1:length(devices)
           end
         end
       end % if isempty(NumInterfaces); else
-      if devices(k).outputs > NumOutputs
+      % We want interface #0. We get it by asking for it on Linux,
+      % and indirectly detecting it by the number of outputs on OS/X:
+      if (devices(k).outputs > NumOutputs) || (devices(k).interfaceID == 0)
         daq(end+1) = k;
       end
     end % if streq(devices(k).product,DeviceName)
