@@ -467,7 +467,7 @@ void PsychGetScreenDepths(int screenNumber, PsychDepthType *depths)
  *	 of resolution, pixeldepth and refresh rate. Allocates temporary arrays for storage of this list
  *	 and returns it to the calling routine. This function is basically only used by Screen('Resolutions').
  */
-int PsychGetAllSupportedScreenSettings(int screenNumber, long** widths, long** heights, long** hz, long** bpp)
+int PsychGetAllSupportedScreenSettings(int screenNumber, int outputId, long** widths, long** heights, long** hz, long** bpp)
 {
     int i, rc, numPossibleModes;
     DEVMODE result;
@@ -592,6 +592,8 @@ int PsychGetScreenDepthValue(int screenNumber)
 
 int PsychGetNominalFramerate(int screenNumber)
 {
+  if (PsychPrefStateGet_ConserveVRAM() & kPsychIgnoreNominalFramerate) return(0);
+
   if(screenNumber>=numDisplays)
     PsychErrorExitMsg(PsychError_internal, "screenNumber passed to PsychGetScreenDepths() is out of range"); 
   return(GetDeviceCaps(displayCGIDs[screenNumber], VREFRESH));
@@ -844,7 +846,7 @@ void PsychPositionCursor(int screenNumber, int x, int y, int deviceIdx)
             For example, PsychReadNormalizedGammaTable() vs. PsychGetNormalizedGammaTable().
     
 */
-void PsychReadNormalizedGammaTable(int screenNumber, int *numEntries, float **redTable, float **greenTable, float **blueTable)
+void PsychReadNormalizedGammaTable(int screenNumber, int outputId, int *numEntries, float **redTable, float **greenTable, float **blueTable)
 {
     CGDirectDisplayID	cgDisplayID;
     static  float localRed[256], localGreen[256], localBlue[256];
@@ -871,7 +873,7 @@ void PsychReadNormalizedGammaTable(int screenNumber, int *numEntries, float **re
     *numEntries= 256;
 }
 
-unsigned int PsychLoadNormalizedGammaTable(int screenNumber, int numEntries, float *redTable, float *greenTable, float *blueTable)
+unsigned int PsychLoadNormalizedGammaTable(int screenNumber, int outputId, int numEntries, float *redTable, float *greenTable, float *blueTable)
 {
     psych_bool 	ok; 
     CGDirectDisplayID	cgDisplayID;
@@ -936,7 +938,7 @@ int PsychGetDisplayBeamPosition(CGDirectDisplayID cgDisplayId, int screenNumber)
 	int	beampos = -1;
 	
 	// Apply remapping of screenId's to heads, if any: Usually identity mapping.
-	screenNumber = PsychScreenToHead(screenNumber);
+	screenNumber = PsychScreenToHead(screenNumber, 0);
 	
 	if(displayDeviceDDrawObject[screenNumber]) {
 		// We have a Direct draw object: Try to use GetScanLine():
@@ -993,7 +995,7 @@ void PsychTestDDrawBeampositionQueries(int screenNumber)
 	int verbosity = PsychPrefStateGet_Verbosity();
 	
 	// Check how beamposition query behaves inside the vertical blanking interval:
-	if((displayDeviceDDrawObject[PsychScreenToHead(screenNumber)]) && (PsychPrefStateGet_VBLTimestampingMode()>=0)) {
+	if((displayDeviceDDrawObject[PsychScreenToHead(screenNumber, 0)]) && (PsychPrefStateGet_VBLTimestampingMode()>=0)) {
 		// We have a Direct draw object and beampos queries are enabled: Try to test GetScanLine():
 		
 		// First find reference height values for display, aka start of vertical blank.
@@ -1038,7 +1040,7 @@ void PsychTestDDrawBeampositionQueries(int screenNumber)
 			
 			// Query beam position:
 			beampos = 0xdeadbeef;
-			rc=IDirectDraw_GetScanLine(displayDeviceDDrawObject[PsychScreenToHead(screenNumber)], (LPDWORD) &beampos);
+			rc=IDirectDraw_GetScanLine(displayDeviceDDrawObject[PsychScreenToHead(screenNumber, 0)], (LPDWORD) &beampos);
 			if (rc==DD_OK || rc==DDERR_VERTICALBLANKINPROGRESS) {
 				// Some sample returned...
 				totalcount++;

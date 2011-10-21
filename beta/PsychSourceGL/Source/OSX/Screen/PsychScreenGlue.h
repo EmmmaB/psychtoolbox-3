@@ -56,7 +56,7 @@ void						PsychReleaseScreen(int screenNumber);
 psych_bool					PsychIsScreenCaptured(int screenNumber);
 int							PsychGetNumDisplays(void);
 int							PsychGetNumPhysicalDisplays(void);	// OS/X only!
-int							PsychGetAllSupportedScreenSettings(int screenNumber, long** widths, long** heights, long** hz, long** bpp);
+int                         PsychGetAllSupportedScreenSettings(int screenNumber, int outputId, long** widths, long** heights, long** hz, long** bpp);
 void						PsychGetScreenDepths(int screenNumber, PsychDepthType *depths);
 psych_bool					PsychCheckVideoSettings(PsychScreenSettingsType *setting);
 void						PsychGetScreenDepth(int screenNumber, PsychDepthType *depth);   //dont' use this and get rid  of it.
@@ -75,8 +75,8 @@ psych_bool					PsychRestoreScreenSettings(int screenNumber);
 void						PsychHideCursor(int screenNumber, int deviceIdx);
 void						PsychShowCursor(int screenNumber, int deviceIdx);
 void						PsychPositionCursor(int screenNumber, int x, int y, int deviceIdx);
-void						PsychReadNormalizedGammaTable(int screenNumber, int *numEntries, float **redTable, float **greenTable, float **blueTable);
-unsigned int 				PsychLoadNormalizedGammaTable(int screenNumber, int numEntries, float *redTable, float *greenTable, float *blueTable);
+void			    PsychReadNormalizedGammaTable(int screenNumber, int outputId, int *numEntries, float **redTable, float **greenTable, float **blueTable);
+unsigned int                PsychLoadNormalizedGammaTable(int screenNumber, int outputId, int numEntries, float *redTable, float *greenTable, float *blueTable);
 int                         PsychGetDisplayBeamPosition(CGDirectDisplayID cgDisplayId, int screenNumber);
 PsychError					PsychOSSynchronizeDisplayScreens(int *numScreens, int* screenIds, int* residuals, unsigned int syncMethod, double syncTimeOut, int allowedResidual);
 void						PsychOSShutdownPsychtoolboxKernelDriverInterface(void);
