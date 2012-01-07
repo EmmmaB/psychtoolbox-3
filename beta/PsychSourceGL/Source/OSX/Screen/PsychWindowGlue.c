@@ -65,8 +65,17 @@ static struct {
     vm_size_t           shmemSize;    
 } fbsharedmem[kPsychMaxPossibleDisplays];   
 
+static struct {
+    psych_mutex         mutex;
+    double              vblTimestamp;
+    psych_uint64        vblCount;
+} cvDisplayLinkData[kPsychMaxPossibleDisplays];
+
 static CVDisplayLinkRef cvDisplayLink[kPsychMaxPossibleDisplays] = { NULL };
 static int screenRefCount[kPsychMaxPossibleDisplays] = { 0 };
+
+static long osMajor, osMinor;
+static psych_bool useCoreVideoTimestamping;
 
 // Display link callback: Needed so we can actually start the display link:
 // Gets apparently called from a separate high-priority thread, close to vblank
@@ -76,22 +85,27 @@ static CVReturn PsychCVDisplayLinkOutputCallback(CVDisplayLinkRef displayLink, c
 {
     double tVBlank;
     CVTimeStamp tVbl;
-
     double tHost;
     
-    // This is a pure dummy implementation which does nothing but return a success return code
-    // to keep the CVDisplayLink thread running happily.
+    // Retrieve screenId of associated display screen:
+    int screenId = (int) displayLinkContext;
+    
+    // Translate CoreVideo inNow timestamp with time of last vbl from gpu time
+    // to host system time, aka our GetSecs() timebase:
+    memset(&tVbl, 0, sizeof(tVbl));
+    tVbl.version = 0;
+    tVbl.flags = kCVTimeStampHostTimeValid;
+    CVDisplayLinkTranslateTime(displayLink, inNow, &tVbl);
+    tVBlank = (double) tVbl.hostTime / (double) 1000000000;
 
+    // Store timestamp in our shared data structure, also increment virtual vblank counter:
+    PsychLockMutex(&(cvDisplayLinkData[screenId].mutex));
+    cvDisplayLinkData[screenId].vblCount++;
+    cvDisplayLinkData[screenId].vblTimestamp = tVBlank;
+    PsychUnlockMutex(&(cvDisplayLinkData[screenId].mutex));
+    
     // Low-level timestamp debugging requested?
-    if (PsychPrefStateGet_Verbosity() > 19) {
-        // Translate CoreVideo inNow timestamp with time of last vbl from gpu time
-        // to host system time, aka our GetSecs() timebase:
-        memset(&tVbl, 0, sizeof(tVbl));
-        tVbl.version = 0;
-        tVbl.flags = kCVTimeStampHostTimeValid;
-        CVDisplayLinkTranslateTime(displayLink, inNow, &tVbl);
-        tVBlank = (double) tVbl.hostTime / (double) 1000000000;
-
+    if (PsychPrefStateGet_Verbosity() > 20) {
         // Compare CV timestamps against host time for correctness check. We wait 4 msecs,
         // then take tHost and hopefully tHost will be at least 4 msecs later than the
         // computed vblank timestamp tVBlank:
@@ -99,7 +113,7 @@ static CVReturn PsychCVDisplayLinkOutputCallback(CVDisplayLinkRef displayLink, c
         PsychGetAdjustedPrecisionTimerSeconds(&tHost);
         
         // Caution: Don't run from Matlab GUI! This printf will crash Matlab otherwise.
-        printf("CVCallback: %i : tHost = %lf secs, tVBlank = %lf secs. tHost - tVBlank = %lf secs.\n", (int) displayLinkContext, tHost, tVBlank, tHost - tVBlank);
+        printf("CVCallback: %i : tHost = %lf secs, tVBlank = %lf secs. tHost - tVBlank = %lf secs.\n", screenId, tHost, tVBlank, tHost - tVBlank);
     }
 
     return(kCVReturnSuccess);
@@ -532,7 +546,8 @@ psych_bool PsychOSOpenOnscreenWindow(PsychScreenSettingsType *screenSettings, Ps
     // Init to zero:
     windowRecord->targetSpecific.pixelFormatObject = NULL;
 	windowRecord->targetSpecific.glusercontextObject = NULL;
-		
+	windowRecord->targetSpecific.glswapcontextObject = NULL;
+
 	if (!useAGL && !AGLForFullscreen) {
 		// Context setup for CGL (non-windowed, non-multiscreen mode):
 		
@@ -837,6 +852,81 @@ psych_bool PsychOSOpenOnscreenWindow(PsychScreenSettingsType *screenSettings, Ps
 		}
 	}
 
+    // Create glswapcontextObject - An OpenGL context for exclusive use by parallel
+    // background threads, e.g., our thread for async flip operations:
+    if (TRUE) {
+		if (!useAGL) {
+			error=CGLCreateContext(windowRecord->targetSpecific.pixelFormatObject, windowRecord->targetSpecific.contextObject, &(windowRecord->targetSpecific.glswapcontextObject));
+			if (error) {
+				printf("\nPTB-ERROR[SwapContextCreation failed: %s]: Creating a private OpenGL context for async-bufferswaps failed.\n\n", CGLErrorString(error));
+				return(FALSE);
+			}
+			// Attach it to our onscreen drawable:
+			error=CGLSetFullScreen(windowRecord->targetSpecific.glswapcontextObject);
+			if (error) {
+				printf("\nPTB-ERROR[CGLSetFullScreen for swapcontext failed: %s]: Attaching private OpenGL context async-bufferswaps failed.\n\n", CGLErrorString(error));
+				CGLSetCurrentContext(NULL);
+				return(FALSE);
+			}
+			// Copy full state from our main context:
+			error = CGLCopyContext(windowRecord->targetSpecific.contextObject, windowRecord->targetSpecific.glswapcontextObject, GL_ALL_ATTRIB_BITS);
+			if (error) {
+				printf("\nPTB-ERROR[CGLCopyContext for swapcontext failed: %s]: Copying state to private OpenGL context for async-bufferswaps failed.\n\n", CGLErrorString(error));
+				CGLSetCurrentContext(NULL);
+				return(FALSE);
+			}
+		}
+		else {
+			AGLContext usercontext = NULL;
+			usercontext = aglCreateContext(pf, glcontext);
+			if (usercontext == NULL) {
+				printf("\nPTB-ERROR[AGL-SwapContextCreation failed: %s]: Creating a private OpenGL context for async-bufferswaps failed for unknown reasons.\n\n", aglErrorString(aglGetError()));
+				// Ok, this is dirty, but better than nothing...
+				DisposeWindow(carbonWindow);
+				return(FALSE);
+			}
+
+			if (!aglSetInteger(usercontext, AGL_BUFFER_NAME, &aglbufferid)) {
+				printf("\nPTB-ERROR[aglSetInteger for swapcontext failed: %s]:The specified display may not support double buffering and/or stereo output. There could be insufficient video memory\n\n", aglErrorString(aglGetError()));
+				DisposeWindow(carbonWindow);
+				return(FALSE);
+			}
+			
+			if (AGLForFullscreen) {
+				// Attach context to our fullscreen device:
+				if (!aglSetFullScreen(usercontext, 0, 0, 0, 0)) {
+					printf("\nPTB-ERROR[aglSetFullScreen for swapcontext failed: %s]: Attaching private OpenGL context for async-bufferswaps failed for unknown reasons.\n\n",  aglErrorString(aglGetError()));
+					// Ok, this is dirty, but better than nothing...
+					return(FALSE);
+				}
+			}
+			else {
+				// Attach it to our onscreen drawable:
+				if (!aglSetDrawable(usercontext, GetWindowPort(carbonWindow))) {
+					printf("\nPTB-ERROR[aglSetDrawable for swapcontext failed: %s]: Attaching private OpenGL context for async-bufferswaps failed for unknown reasons.\n\n",  aglErrorString(aglGetError()));
+					// Ok, this is dirty, but better than nothing...
+					DisposeWindow(carbonWindow);
+					return(FALSE);
+				}
+			}
+			
+			// Copy full state from our main context:
+			if (!aglCopyContext(glcontext, usercontext, GL_ALL_ATTRIB_BITS)) {
+				printf("\nPTB-ERROR[aglCopyContext for swapcontext failed: %s]: Copying state to private OpenGL context for async-bufferswaps failed for unknown reasons.\n\n",  aglErrorString(aglGetError()));
+				// Ok, this is dirty, but better than nothing...
+				DisposeWindow(carbonWindow);
+				return(FALSE);
+			}
+
+			// Retrieve CGL context for userspace context:
+			if (!aglGetCGLContext(usercontext, (void**) &(windowRecord->targetSpecific.glswapcontextObject))) {
+				printf("\nPTB-ERROR[aglGetCGLContext failed: %s]: Getting CGL userspace context for async-bufferswaps failed for unknown reasons.\n\n", aglErrorString(aglGetError()));
+				DisposeWindow(carbonWindow);
+				return(FALSE);
+			}
+		}
+    }
+    
 	// Ok, if we reached this point and AGL is used, we should store its onscreen Carbon window handle:
 	if (useAGL && !AGLForFullscreen) {
 		windowRecord->targetSpecific.windowHandle = carbonWindow;
@@ -876,7 +966,17 @@ psych_bool PsychOSOpenOnscreenWindow(PsychScreenSettingsType *screenSettings, Ps
         // If the mapping worked, we have a pointer to the driver memory in .shmem, otherwise we have NULL:
     }
 
-    if ((fbsharedmem[screenSettings->screenNumber].shmem) && (NULL == cvDisplayLink[screenSettings->screenNumber])) {
+    // Query OS/X version:
+	Gestalt(gestaltSystemVersionMajor, &osMajor);
+	Gestalt(gestaltSystemVersionMinor, &osMinor);
+    if ((osMajor > 10) || (osMinor >= 7)) {
+        useCoreVideoTimestamping = TRUE;
+        if (PsychPrefStateGet_Verbosity() > 2) printf("PTB-INFO: Broken Apple OS/X 10.7 or later detected: Using CoreVideo timestamping instead of precise vbl-irq timestamping.\n");
+    } else {
+        useCoreVideoTimestamping = FALSE;
+    }
+
+    if (useCoreVideoTimestamping && (fbsharedmem[screenSettings->screenNumber].shmem) && (NULL == cvDisplayLink[screenSettings->screenNumber])) {
         // Create and start a CVDisplayLink for this screen.
         if (kCVReturnSuccess != CVDisplayLinkCreateWithCGDisplay(cgDisplayID, &cvDisplayLink[screenSettings->screenNumber])) {
             if (PsychPrefStateGet_Verbosity()>1) printf("PTB-WARNING: Failed to create CVDisplayLink for screenId %i. This may impair VBL timestamping.\n", screenSettings->screenNumber);
@@ -884,11 +984,19 @@ psych_bool PsychOSOpenOnscreenWindow(PsychScreenSettingsType *screenSettings, Ps
             // Assign dummy output callback, as this is mandatory to get the link up and running:
             CVDisplayLinkSetOutputCallback(cvDisplayLink[screenSettings->screenNumber], &PsychCVDisplayLinkOutputCallback, (void*) screenSettings->screenNumber);
             
+            // Setup shared data structure and mutex:
+            memset(&cvDisplayLinkData[screenSettings->screenNumber], 0, sizeof(cvDisplayLinkData[screenSettings->screenNumber]));
+            PsychInitMutex(&(cvDisplayLinkData[screenSettings->screenNumber].mutex));
+
             // Start the link:
             if (kCVReturnSuccess != CVDisplayLinkStart(cvDisplayLink[screenSettings->screenNumber])) {
                 // Failed to start: Release it again and report error:
                 CVDisplayLinkRelease(cvDisplayLink[screenSettings->screenNumber]);
                 cvDisplayLink[screenSettings->screenNumber] = NULL;
+
+                // Teardown shared data structure and mutex:
+                PsychDestroyMutex(&(cvDisplayLinkData[screenSettings->screenNumber].mutex));
+                useCoreVideoTimestamping = FALSE;
                 
                 if (PsychPrefStateGet_Verbosity()>1) printf("PTB-WARNING: Failed to start CVDisplayLink for screenId %i. This may impair VBL timestamping.\n", screenSettings->screenNumber);
             }
@@ -924,10 +1032,21 @@ psych_bool PsychOSOpenOnscreenWindow(PsychScreenSettingsType *screenSettings, Ps
 double PsychOSGetVBLTimeAndCount(PsychWindowRecordType *windowRecord, psych_uint64* vblCount)
 {
 	unsigned int screenid = windowRecord->screenNumber;
-	double t1, t2;
 	psych_uint64 refvblcount;
-    CVTimeStamp cvTime;
+	double t1, t2, cvTime = 0;
 	
+    // Should we use CoreVideo display link timestamping?
+    if (useCoreVideoTimestamping && cvDisplayLink[screenid]) {
+        // Yes: Retrieve data from our shared data structure:
+        PsychLockMutex(&(cvDisplayLinkData[screenid].mutex));
+        *vblCount = cvDisplayLinkData[screenid].vblCount;
+        cvTime = cvDisplayLinkData[screenid].vblTimestamp;
+        PsychUnlockMutex(&(cvDisplayLinkData[screenid].mutex));
+
+        // If timestamp debugging is off, we're done:
+        if (PsychPrefStateGet_Verbosity() <= 19) return(cvTime);
+    }
+    
     // Do we have a valid shared mapping?
     if (fbsharedmem[screenid].shmem) {
 		// We query each value twice and repeat this double-query until both readings of
@@ -951,15 +1070,11 @@ double PsychOSGetVBLTimeAndCount(PsychWindowRecordType *windowRecord, psych_uint
 
         // Diagnostic check of CV timestamps against our host timestamps:
         // See comments in PsychCVDisplayLinkOutputCallback() on what to expect here...
-        if (PsychPrefStateGet_Verbosity() > 19) {
-            cvTime.version = 0;
-            if (cvDisplayLink[screenid] && (kCVReturnSuccess == CVDisplayLinkGetCurrentTime(cvDisplayLink[screenid], &cvTime)) && (cvTime.flags & kCVTimeStampVideoHostTimeValid)) {
-                t2 = (double) cvTime.videoTime / (double) cvTime.videoTimeScale;
-                t2 = t2 - t1;
-                printf("PTB-DEBUG: [videoTimeScale %lf] Difference CoreVideoTimestamp - vblTimestamp = %lf secs.\n", (double) cvTime.videoTimeScale, t2);
-            }
+        if (useCoreVideoTimestamping && (PsychPrefStateGet_Verbosity() > 19)) {
+                t2 = cvTime - t1;
+                printf("PTB-DEBUG: Difference CoreVideoTimestamp - vblTimestamp = %lf msecs.\n", 1000.0 * t2);
         }
-        
+
         // Retrieve absolute system time of last retrace, convert into PTB standard time system and return it:
 		return(t1);
     }
@@ -1043,6 +1158,7 @@ void PsychOSCloseWindow(PsychWindowRecordType *windowRecord)
 			// Destroy onscreen window, detach context:
 			CGLClearDrawable(windowRecord->targetSpecific.contextObject);
 			if (windowRecord->targetSpecific.glusercontextObject) CGLClearDrawable(windowRecord->targetSpecific.glusercontextObject);
+			if (windowRecord->targetSpecific.glswapcontextObject) CGLClearDrawable(windowRecord->targetSpecific.glswapcontextObject);
 			PsychCaptureScreen(windowRecord->screenNumber);
 		}
 	}
@@ -1053,7 +1169,8 @@ void PsychOSCloseWindow(PsychWindowRecordType *windowRecord)
 	// Destroy rendering context:
     CGLDestroyContext(windowRecord->targetSpecific.contextObject);
 	if (windowRecord->targetSpecific.glusercontextObject) CGLDestroyContext(windowRecord->targetSpecific.glusercontextObject);
-
+	if (windowRecord->targetSpecific.glswapcontextObject) CGLDestroyContext(windowRecord->targetSpecific.glswapcontextObject);
+    
     // Disable low-level mapping of framebuffer cursor memory:
     if (fbsharedmem[windowRecord->screenNumber].shmem && (screenRefCount[windowRecord->screenNumber] == 1)) {
         if (PsychPrefStateGet_Verbosity() > 3) printf("PTB-INFO: Releasing shared memory mapping for screen %i.\n", windowRecord->screenNumber);
@@ -1069,8 +1186,12 @@ void PsychOSCloseWindow(PsychWindowRecordType *windowRecord)
             if (PsychPrefStateGet_Verbosity() > 3) printf("PTB-INFO: Releasing CVDisplayLink for screen %i.\n", windowRecord->screenNumber);
             
             if (CVDisplayLinkIsRunning(cvDisplayLink[windowRecord->screenNumber])) CVDisplayLinkStop(cvDisplayLink[windowRecord->screenNumber]);
+            PsychYieldIntervalSeconds(0.020);
             CVDisplayLinkRelease(cvDisplayLink[windowRecord->screenNumber]);
             cvDisplayLink[windowRecord->screenNumber] = NULL;
+
+            // Teardown shared data structure and mutex:
+            PsychDestroyMutex(&(cvDisplayLinkData[windowRecord->screenNumber].mutex));
         }
     }
 
@@ -1151,12 +1272,13 @@ psych_int64 PsychOSScheduleFlipWindowBuffers(PsychWindowRecordType *windowRecord
 void PsychOSFlipWindowBuffers(PsychWindowRecordType *windowRecord)
 {	
 	CGLError			cglerr;
-
+    psych_bool oldStyle = (PsychPrefStateGet_ConserveVRAM() & kPsychUseOldStyleAsyncFlips) ? TRUE : FALSE;
+    
 	// Execute OS neutral bufferswap code first:
 	PsychExecuteBufferSwapPrefix(windowRecord);
 	
     // Trigger the "Front <-> Back buffer swap (flip) (on next vertical retrace)":
-    if ((cglerr = CGLFlushDrawable(windowRecord->targetSpecific.contextObject))) {
+    if ((cglerr = CGLFlushDrawable((oldStyle || PsychIsMasterThread()) ? windowRecord->targetSpecific.contextObject : windowRecord->targetSpecific.glswapcontextObject))) {
 		// Failed! This is an internal OpenGL/CGL error. We can't do anything about it, just report it:
 		printf("PTB-ERROR: Doublebuffer-Swap failed (probably during 'Flip')! Internal OpenGL subsystem/driver error: %s. System misconfigured or driver/operating system bug?!?\n", CGLErrorString(cglerr));
 	}
@@ -1217,7 +1339,6 @@ void PsychOSUnsetGLContext(PsychWindowRecordType *windowRecord)
 		
 		// Need to unbind any FBO's in old context before switch, otherwise bad things can happen...
 		if (glBindFramebufferEXT) glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
-		glFlush();
 	}
 
 	// Detach totally:
@@ -1231,16 +1352,17 @@ void PsychOSSetVBLSyncLevel(PsychWindowRecordType *windowRecord, int swapInterva
 {
     CGLError	error;
     long myinterval = (long) swapInterval;
-	
+    psych_bool oldStyle = (PsychPrefStateGet_ConserveVRAM() & kPsychUseOldStyleAsyncFlips) ? TRUE : FALSE;
+    	
 	// Store new setting also in internal helper variable, e.g., to allow workarounds to work:
 	windowRecord->vSynced = (swapInterval > 0) ? TRUE : FALSE;
 	
-    error=CGLSetParameter(windowRecord->targetSpecific.contextObject, kCGLCPSwapInterval, &myinterval);
+    error=CGLSetParameter((oldStyle || PsychIsMasterThread()) ? windowRecord->targetSpecific.contextObject : windowRecord->targetSpecific.glswapcontextObject, kCGLCPSwapInterval, &myinterval);
     if (error) {
         if (PsychPrefStateGet_Verbosity()>1) printf("\nPTB-WARNING: FAILED to %s synchronization to vertical retrace!\n\n", (swapInterval>0) ? "enable" : "disable");
     }
 
-    error=CGLGetParameter(windowRecord->targetSpecific.contextObject, kCGLCPSwapInterval, &myinterval);
+    error=CGLGetParameter((oldStyle || PsychIsMasterThread()) ? windowRecord->targetSpecific.contextObject : windowRecord->targetSpecific.glswapcontextObject, kCGLCPSwapInterval, &myinterval);
     if (error || (myinterval != (long) swapInterval)) {
         if (PsychPrefStateGet_Verbosity()>1) printf("\nPTB-WARNING: FAILED to %s synchronization to vertical retrace (System ignored setting)!\n\n", (swapInterval>0) ? "enable" : "disable");
     }
@@ -1286,6 +1408,7 @@ void PsychOSProcessEvents(PsychWindowRecordType *windowRecord, int flags)
 		GetWindowBounds(windowRecord->targetSpecific.windowHandle, kWindowContentRgn, &globalBounds);
 		PsychMakeRect(windowRecord->globalrect, globalBounds.left, globalBounds.top, globalBounds.right, globalBounds.bottom);
 		PsychNormalizeRect(windowRecord->globalrect, windowRecord->rect);
-		PsychSetupView(windowRecord);
+		PsychSetupClientRect(windowRecord);
+		PsychSetupView(windowRecord, FALSE);
 	}
 }
