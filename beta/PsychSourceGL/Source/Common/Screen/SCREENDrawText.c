@@ -369,8 +369,8 @@ PsychError	PsychOSDrawUnicodeText(PsychWindowRecordType* winRec, PsychRectType* 
     glGenTextures(1, &myTexture);				//create an index "name" for our texture
     glBindTexture(GL_TEXTURE_2D, myTexture);	//instantiate a texture of type associated with the index and set it to be the target for subsequent gl texture operators.
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);		//tell gl how to unpack from our memory when creating a surface, namely don't really unpack it but use it for texture storage.
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);	//specify interpolation scaling rule for copying from texture.  
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);  //specify interpolation scaling rule from copying from texture.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);	//specify interpolation scaling rule for copying from texture.  
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);  //specify interpolation scaling rule from copying from texture.
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
     PsychTestForGLErrors();
@@ -872,7 +872,8 @@ PsychError	PsychOSDrawUnicodeTextGDI(PsychWindowRecordType* winRec, PsychRectTyp
 	unsigned char*				scanptr;
 	int							skiplines, renderheight;	
 	DWORD						outputQuality;
-
+    GLuint						myTexture;
+	
 	// Convert input double unicode string into WCHAR unicode string for Windows renderer:
 	textUniString = (WCHAR*) PsychMallocTemp(sizeof(WCHAR) * stringLengthChars);
 	for (i = 0; i < stringLengthChars; i++) textUniString[i] = (WCHAR) textUniDoubleString[i];
@@ -1113,7 +1114,7 @@ PsychError	PsychOSDrawUnicodeTextGDI(PsychWindowRecordType* winRec, PsychRectTyp
     bincolors[3] = (unsigned int)(incolors[3] * 255);
 
 	scanptr = (unsigned char*) pBits + skiplines * oldWidth * 4;
-	for (i=0; i<oldWidth * renderheight; i++) {
+	for (i=0; i< oldWidth * renderheight; i++) {
 		*(scanptr++) = bincolors[0];	 // Copy blue text color to blue byte.
 		*(scanptr++) = bincolors[1];	 // Copy green text color to green byte.
 		// Copy red byte to alpha-channel (its our anti-aliasing alpha-value), but
@@ -1159,19 +1160,47 @@ PsychError	PsychOSDrawUnicodeTextGDI(PsychWindowRecordType* winRec, PsychRectTyp
     // Setup unpack mode and position for blitting of the bitmap to screen:
 	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
-	// MK: Subracting one should be correct, but isn't (visually). Maybe a
-	// a side-effect of gfx-rasterizer inaccuracy?
-	// glRasterPos2i(0,(int) oldHeight - 1 - skiplines);
-	glRasterPos2i(0,(int) oldHeight - 0 - skiplines);
-
 	// Blit it to screen: The GL_BGRA swizzles RGBA <-> BGRA properly:
 	scanptr = (unsigned char*) pBits + skiplines * oldWidth * 4;
 
 	// Disable draw shader:
 	PsychSetShader(winRec, 0);
 
-    glPixelZoom(1,1);
-	glDrawPixels(oldWidth, renderheight, GL_RGBA, GL_UNSIGNED_BYTE, scanptr);
+	// Which rendering path to choose?
+	if (GL_TEXTURE_2D == PsychGetTextureTarget(winRec)) {
+		// Only 2D power-of-two textures supported. We use the old fallback path
+		// which does not allow to apply geometric transformations to the drawn
+		// text. Only extremely old cards and drivers will take this path...
+		glRasterPos2i(0, (int) oldHeight - skiplines);		
+		glPixelZoom(1,1);
+		glDrawPixels(oldWidth, renderheight, GL_RGBA, GL_UNSIGNED_BYTE, scanptr);
+	}
+	else {
+		// Rectangle textures supported. Use texture mapping onto a quad, so
+		// geometric transformations apply correctly:
+		glEnable(GL_TEXTURE_RECTANGLE_EXT);
+		glGenTextures(1, &myTexture);
+		glBindTexture(GL_TEXTURE_RECTANGLE_EXT, myTexture);
+		glTexParameteri(GL_TEXTURE_RECTANGLE_EXT, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_RECTANGLE_EXT, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_RECTANGLE_EXT, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_RECTANGLE_EXT, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+		glTexImage2D(GL_TEXTURE_RECTANGLE_EXT, 0, GL_RGBA, (GLsizei) oldWidth, (GLsizei) renderheight, 0, GL_RGBA, GL_UNSIGNED_BYTE, scanptr);		
+
+		// Submit textured quad with text to pipeline:
+		glBegin(GL_QUADS);
+		glTexCoord2d(0, renderheight);			glVertex2d(0, oldHeight - skiplines - renderheight);
+		glTexCoord2d(oldWidth, renderheight);	glVertex2d(oldWidth, oldHeight - skiplines - renderheight);
+		glTexCoord2d(oldWidth, 0);				glVertex2d(oldWidth, oldHeight - skiplines);
+		glTexCoord2d(0, 0);						glVertex2d(0, oldHeight - skiplines);
+		glEnd();
+		
+		// Done with this texture:
+		glBindTexture(GL_TEXTURE_RECTANGLE_EXT, 0);
+		glDeleteTextures(1, &myTexture);
+		glDisable(GL_TEXTURE_RECTANGLE_EXT);
+	}
 	
 	// Disable alpha test after blit:
     glDisable(GL_ALPHA_TEST);
