@@ -297,7 +297,7 @@ PsychError PsychHIDEnumerateHIDInputDevices(int deviceClass)
     return(PsychError_none);
 }
 
-static int PsychHIDGetDefaultKbQueueDevice(void)
+int PsychHIDGetDefaultKbQueueDevice(void)
 {
     // Return first enumerated keyboard (index == 0) if any available:
     if (ndevices > 0) return(0);
@@ -318,7 +318,7 @@ static unsigned int PsychHIDOSMapKey(unsigned int inkeycode)
 	#define MAPVK_VSC_TO_VK_EX 3
 	#endif
 
-	keycode = MapVirtualKeyEx(inkeycode, MAPVK_VSC_TO_VK_EX, GetKeyboardLayout(0));    
+	keycode = MapVirtualKeyEx(inkeycode, MAPVK_VSC_TO_VK_EX, GetKeyboardLayout(0));
 	if (keycode == 0) {
 		// Untranslated keycode: Use table.
 		switch(inkeycode) {
@@ -586,9 +586,11 @@ void KbQueueProcessEvents(psych_bool blockingSinglepass)
     DWORD dwItems; 
 	double tnow;
 	unsigned int i, keycode, keystate;
-    
-	while (1) {
-        
+ 	PsychHIDEventRecord evt;
+	WORD asciiValue[2];
+	UCHAR keyboardState[256];
+
+	while (1) {        
 		// Single pass or multi-pass?
 		if (blockingSinglepass) {
 			// Wait until at least one event available and dequeue it:
@@ -602,7 +604,7 @@ void KbQueueProcessEvents(psych_bool blockingSinglepass)
         
 		// Take timestamp:
 		PsychGetAdjustedPrecisionTimerSeconds(&tnow);
-        
+
         // Need the lock from here on:
         PsychLockMutex(&KbQueueMutex);
         
@@ -626,7 +628,13 @@ void KbQueueProcessEvents(psych_bool blockingSinglepass)
                 
                 // If failed or nothing more to fetch, break out of fetch loop:
                 if (!SUCCEEDED(rc) || (0 == dwItems)) break;
-                
+
+				// Clear ringbuffer event:
+				memset(&evt, 0 , sizeof(evt));
+
+				// Init character code to "unmapped": It will stay like that for anything but real keyboards:
+				evt.cookedEventCode = -1;
+
                 // Map to key code and key state:
                 keycode = event.dwOfs & 0xff;
                 keystate = event.dwData & 0x80;
@@ -634,7 +642,20 @@ void KbQueueProcessEvents(psych_bool blockingSinglepass)
 				// Remap keycode into target slot in our arrays, depending on input device:
                 switch (info[i].dwDevType & 0xff) {
 					case DI8DEVTYPE_KEYBOARD:
-						// Map scancode 'keycode' to virtual key code 'keycode':
+						// Try to map scancode to ascii character:
+                        memset(keyboardState, 0, sizeof(keyboardState));
+                        if (GetAsyncKeyState(VK_SHIFT)) keyboardState[VK_SHIFT] = 0xff;
+                        
+                        if ((1 == ToAsciiEx(MapVirtualKeyEx(keycode, 1, GetKeyboardLayout(0)), keycode, keyboardState, (LPWORD) &(asciiValue[0]), 0, GetKeyboardLayout(0)))) {
+							// Mapped to single char: Return it as cooked keycode:
+							evt.cookedEventCode = (int) (asciiValue[0] & 0xff);
+						}
+						else {
+							// Could not map key to valid ascii character: Mark as "not mapped" aka zero:
+							evt.cookedEventCode = 0;
+						}
+
+                        // Map scancode 'keycode' to virtual key code 'keycode':
 						keycode = PsychHIDOSMapKey(keycode);
 					break;
 
@@ -671,13 +692,22 @@ void KbQueueProcessEvents(psych_bool blockingSinglepass)
                         // ie., the slot is so far empty:
                         if (psychHIDKbQueueFirstPress[i][keycode] == 0) psychHIDKbQueueFirstPress[i][keycode] = tnow;
                         psychHIDKbQueueLastPress[i][keycode] = tnow;
+						evt.status |= (1 << 0);
                     } else {
                         // Enqueue key release. See logic above:
                         if (psychHIDKbQueueFirstRelease[i][keycode] == 0) psychHIDKbQueueFirstRelease[i][keycode] = tnow;
                         psychHIDKbQueueLastRelease[i][keycode] = tnow;
+						evt.status &= ~(1 << 0);
+						// Clear cooked keycode - We don't record key releases this way:
+						if (evt.cookedEventCode > 0) evt.cookedEventCode = 0;
                     }
+
+					// Update event buffer:
+					evt.timestamp = tnow;
+					evt.rawEventCode = keycode + 1;
+					PsychHIDAddEventToEventBuffer(i, &evt);
                     
-                    // Tell waiting userspace something interesting has changed:
+                    // Tell waiting userspace (under KbQueueMutex protection for better scheduling) something interesting has changed:
                     PsychSignalCondition(&KbQueueCondition);
                 }
                 // Next fetch iteration for this device...
@@ -772,6 +802,9 @@ PsychError PsychHIDOSKbQueueCreate(int deviceIndex, int numScankeys, int* scanKe
 		// None provided. Enable all keys by default:
 		memset(psychHIDKbQueueScanKeys[deviceIndex], 1, 256 * sizeof(int));        
 	}
+
+	// Create event buffer:
+	PsychHIDCreateEventBuffer(deviceIndex);
     
 	// Ready to use this keybord queue.
 	return(PsychError_none);
@@ -805,6 +838,9 @@ void PsychHIDOSKbQueueRelease(int deviceIndex)
 	free(psychHIDKbQueueLastRelease[deviceIndex]); psychHIDKbQueueLastRelease[deviceIndex] = NULL;
 	free(psychHIDKbQueueScanKeys[deviceIndex]); psychHIDKbQueueScanKeys[deviceIndex] = NULL;
     
+	// Release kbqueue event buffer:
+	PsychHIDDeleteEventBuffer(deviceIndex);
+
 	// Done.
 	return;
 }
