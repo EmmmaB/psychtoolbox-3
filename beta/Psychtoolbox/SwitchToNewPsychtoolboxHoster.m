@@ -21,15 +21,42 @@ function SwitchToNewPsychtoolboxHoster
 %                 as its execution would be entirely redundant by definition.
 
 % We can skip this routine. Why? Because all current copies of the routine
-% are hosted on GoogleCode since 2012, so the pure fact that this version
+% We are hosted on GoogleCode since 2012, so the pure fact that this version
 % of the file is executed means that we *are* in fact hosted on GoogleCode.
 % Therefore no need for a redundant check :)
 % The write-locked copy of this routine on Berlios is still active and
 % important for switchovers.
-% We do leave this routine in place, in its disabled state, in case we
-% would need to do a move of ptb's hosting again in the future, so we
-% would only need to change the old and new hosting URL's and reenable the
-% routine.
+
+% Use this version of the routine as a reminder that users should get
+% up-to-date versions of PTB 3.0.10+ from our new GitHub repo:
+fprintf('\n\n\n\n');
+fprintf('You have just updated to a old legacy version of Psychtoolbox.\n');
+fprintf('This is a version older than version 3.0.10. It is no longer\n');
+fprintf('supported or maintained. If you want to enjoy a more recent\n');
+fprintf('Psychtoolbox of version 3.0.10 or later, the automatic updater\n');
+fprintf('will not do this for you.\n\n');
+fprintf('Instead you need to run the DownloadPsychtoolbox() function.\n');
+fprintf('This will *delete* your old Psychtoolbox folder completely and then\n');
+fprintf('download a fresh copy of 3.0.10 or later from our new hoster GitHub.\n\n');
+fprintf('After that download, you can use UpdatePsychtoolbox as usual to stay up to date,\n');
+fprintf('or use the DownloadLegacyPsychtoolbox() function to downgrade back to an old\n');
+fprintf('unsupported 3.0.9 or earlier legacy Psychtoolbox if you wish.\n');
+fprintf('\n\n');
+fprintf('Why would you want to upgrade to 3.0.10+? Because it provides you with\n');
+fprintf('new features, bug fixes and improvements. Also because it will provide 64-Bit\n');
+fprintf('support for MacOSX and (sooner or later) for Microsoft Windows.\n\n');
+fprintf('Why would you want to stay away from it and stick to old versions?\n');
+fprintf('Because the new 3.0.10+ versions will no longer support Apple PowerPC\n');
+fprintf('computers running OSX and they will no longer support Matlab versions older\n');
+fprintf('than V7.4, aka R2007a. Various other legacy features will also get removed.\n');
+fprintf('\n');
+fprintf('My advice: When in doubt, do the right thing.\n\n');
+fprintf('Press any key to confirm that you read and understood this message.\n\n');
+
+pause;
+
+fprintf('\n\n\n');
+
 return;
 
 fprintf('Are we hosted on Google''s GoogleCode service, as we should be? Checking...  ');
