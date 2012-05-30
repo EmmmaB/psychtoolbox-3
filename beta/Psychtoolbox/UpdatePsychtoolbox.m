@@ -47,6 +47,8 @@ function UpdatePsychtoolbox(targetdirectory, targetRevision)
 % 10/05/09 mk  Strip trailing fileseperator from targetDirectory, as
 %              suggested by Erik Flister to avoid trouble with new svn
 %              clients.
+% 05/30/12 mk  Allow execution on a 64-Bit runtime to at least make it to the
+%              postinstall routine.
 
 % Flush all MEX files: This is needed at least on M$-Windows for SVN to
 % work if Screen et al. are still loaded.
@@ -80,19 +82,9 @@ if any(isspace(targetdirectory))
     fprintf('The targetdirectory spec contains white-space. This should work, but has not been tested extensively.\n');
 end
 
-% Check if this is a 64-bit Matlab, which we don't support at all:
-if strcmp(computer,'PCWIN64') | strcmp(computer,'MACI64') | ...
-  (~isempty(findstr(computer, '_64')) & isempty(findstr(computer, 'linux'))) %#ok<OR2>
-    fprintf('Psychtoolbox does not work on a 64 bit version of Matlab or Octave on MS-Windows or Apple-OSX.\n');
-    fprintf('You need to install a 32 bit Matlab or Octave to install and use Psychtoolbox.\n');
-    fprintf('Use with 64 bit Matlab or Octave is fully supported on GNU/Linux.\n');
-    fprintf('ERROR: See also http://psychtoolbox.org/wikka.php?wakka=Faq64BitSupport.\n');
-    error('Tried to update on a 64 bit version of Matlab or Octave, which is not supported on this operating system.');
-end
-
 % Check OS
 isWin=strcmp(computer,'PCWIN') | strcmp(computer,'PCWIN64') | strcmp(computer, 'i686-pc-mingw32');
-isOSX=strcmp(computer,'MAC') | strcmp(computer,'MACI') | ~isempty(findstr(computer, 'apple-darwin'));
+isOSX=strcmp(computer,'MAC') | strcmp(computer,'MACI') | strcmp(computer, 'MACI64') | ~isempty(findstr(computer, 'apple-darwin'));
 isLinux=strcmp(computer,'GLNX86') | strcmp(computer,'GLNXA64') | ~isempty(findstr(computer, 'linux-gnu'));
 
 if ~isWin & ~isOSX & ~isLinux %#ok<AND2>
