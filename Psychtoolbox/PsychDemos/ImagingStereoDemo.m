@@ -160,6 +160,12 @@ PsychImaging('PrepareConfiguration');
 if usedatapixx
     % Tell PTB we want to display on a DataPixx device:
     PsychImaging('AddTask', 'General', 'UseDataPixx');
+    
+    % Enable DATAPixx blueline support, and VIEWPixx scanning backlight for optimal 3D
+    Datapixx('Open');
+    Datapixx('EnableVideoStereoBlueline');
+    Datapixx('EnableVideoScanningBacklight');
+    Datapixx('RegWr');
 end
 
 % Ask to restrict stimulus processing to some subarea (ROI) of the
